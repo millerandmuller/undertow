@@ -1,4 +1,4 @@
-import { access, appendFile, mkdir } from 'node:fs/promises';
+import { access, appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   chatSettings,
@@ -27,10 +27,13 @@ import {
   type ChatMessageNotification,
   type ChatNotification,
   type ChatSettingsNotification,
+  type EventSubEvent,
+  type RaidNotification,
   type UndertowEvent,
 } from './eventsub/client.ts';
 import { readJson } from './util/files.ts';
 import type { Helix } from './util/helix.ts';
+import type { ReplayEvent, ReplayHeader, ReplayType } from './sim/replay.ts';
 
 type DisplayListener = (state: DisplayState) => void;
 export type DisplayState = {
@@ -85,6 +88,7 @@ export type RunOptions = {
   socketConstructor?: EventSubSocketConstructor;
   verbose?: boolean;
   clock?: RunClock;
+  recordPath?: string;
 };
 
 export type RunHandle = {
@@ -92,7 +96,7 @@ export type RunHandle = {
   done: Promise<void>;
   stop(): Promise<void>;
 };
-type RunLog = {
+export type RunLog = {
   t: string;
   pace: number;
   setpoint: number;
@@ -170,6 +174,40 @@ function isGift(event: ChatNotification): boolean {
   return event.notice_type.includes('gift');
 }
 
+function isReplayType(type: string): type is ReplayType {
+  return type === 'channel.chat.message' || type === 'channel.chat.notification' ||
+    type === 'channel.chat_settings.update' || type === 'channel.raid';
+}
+
+function recordedPayload(event: UndertowEvent): EventSubEvent {
+  if (event.type === 'channel.chat.message') {
+    const message = event.event as ChatMessageNotification;
+    return {
+      broadcaster_user_id: message.broadcaster_user_id,
+      chatter_user_id: message.chatter_user_id,
+      message_id: message.message_id,
+      message: { text: `<${message.message.text.length} chars>` },
+    };
+  }
+  if (event.type === 'channel.chat.notification') {
+    const notice = event.event as ChatNotification;
+    return {
+      broadcaster_user_id: notice.broadcaster_user_id,
+      chatter_user_id: notice.chatter_user_id,
+      notice_type: notice.notice_type,
+    };
+  }
+  if (event.type === 'channel.raid') {
+    const raid = event.event as RaidNotification;
+    return {
+      from_broadcaster_user_id: raid.from_broadcaster_user_id,
+      to_broadcaster_user_id: raid.to_broadcaster_user_id,
+      viewers: raid.viewers,
+    };
+  }
+  return structuredClone(event.event);
+}
+
 function isRawEvent(entry: unknown): boolean {
   if (typeof entry !== 'object' || entry === null) return false;
   const value = entry as Record<string, unknown>;
@@ -212,9 +250,11 @@ function isLoginFailure(message: string): boolean {
 
 export async function startRun(options: RunOptions): Promise<RunHandle> {
   const logger = options.log ?? console.log;
+  const clock = options.clock ?? SYSTEM_CLOCK;
   const settingsApi = chatSettings(options.helix, options.broadcasterId);
   const baselinePath = join(options.stateDirectory, 'baseline.json');
   const logPath = join(options.stateDirectory, 'storm.log.jsonl');
+  let recordQueue = Promise.resolve();
   let baseline: ChatSettings;
   try {
     await access(baselinePath);
@@ -224,6 +264,19 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     await saveBaseline(baselinePath, baseline);
   }
   let expected = await settingsApi.get();
+  const runStartedAt = clock.now();
+  if (options.recordPath) {
+    await mkdir(dirname(options.recordPath), { recursive: true, mode: 0o700 });
+    const header: ReplayHeader = {
+      kind: 'header',
+      version: 1,
+      label: 'recorded Undertow run',
+      synthetic: false,
+      broadcaster_id: options.broadcasterId,
+      baseline,
+    };
+    await writeFile(options.recordPath, `${JSON.stringify(header)}\n`, { mode: 0o600 });
+  }
   let paceState: PaceState = createPaceState(options.profile.window_s);
   let controller: ControllerState = initialControllerState();
   let warningAt: number | null = null;
@@ -238,7 +291,6 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
   let resolveDone: (() => void) = () => undefined;
   const done = new Promise<void>((resolve) => { resolveDone = resolve; });
   const display = createDisplayState(options.profile.setpoint_msgs_per_s);
-  const clock = options.clock ?? SYSTEM_CLOCK;
   let nextStatusAtMs = clock.now() + options.profile.window_s * 1000;
   const sender = new ChatSender(options.helix, options.broadcasterId, {
     now: () => clock.now(),
@@ -270,6 +322,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     stopOperation = (async () => {
       try {
         if (tickInFlight) await tickInFlight.catch(() => undefined);
+        await recordQueue.catch(() => undefined);
         await restore();
       } catch (error) {
         logger({ type: 'restore_failed', message: errorMessage(error) });
@@ -298,6 +351,10 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
   async function processEvent(event: UndertowEvent): Promise<void> {
     try {
       const nowMs = clock.now();
+      if (options.recordPath) {
+        recordQueue = recordQueue.then(() => recordEvent(event, nowMs));
+        await recordQueue;
+      }
       if (event.type === 'channel.chat.message') {
         const message = event.event as ChatMessageNotification;
         lastMessageId = message.message_id;
@@ -340,6 +397,18 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     }
   }
 
+  async function recordEvent(event: UndertowEvent, nowMs: number): Promise<void> {
+    if (!options.recordPath || !isReplayType(event.type)) return;
+    const safeEvent = recordedPayload(event);
+    const item: ReplayEvent = {
+      kind: 'event',
+      at_ms: Math.max(0, nowMs - runStartedAt),
+      type: event.type,
+      event: safeEvent,
+    };
+    await appendFile(options.recordPath, `${JSON.stringify(item)}\n`);
+  }
+
   function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : 'Unexpected run error';
   }
@@ -347,6 +416,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
   async function apply(action: ControllerAction): Promise<void> {
     if (options.dryRun || action.type === 'none' || action.type === 'yield') return;
     if (action.type === 'restore') {
+      expected = restoreSnapshot(expected, baseline);
       expected = await restoreBaseline(settingsApi, baselinePath);
       return;
     }
