@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>undertow pace</title>
+  <link rel="stylesheet" href="/overlay.css">
+</head>
+<body>
+  <main id="card" class="card" aria-live="polite">
+    <header class="header">
+      <span class="wordmark">undertow</span>
+      <span id="mode" class="mode">dry run</span>
+    </header>
+    <div class="badges">
+      <span id="badge" class="badge hidden"></span>
+      <span id="warning" class="warning hidden"></span>
+    </div>
+    <section class="gauge" aria-label="chat pace gauge">
+      <svg
+        viewBox="0 0 400 160"
+        role="img"
+        aria-label="pace from zero to two and a half times setpoint"
+      >
+        <path class="arc" d="M 60 150 A 140 140 0 0 0 340 150"></path>
+        <line id="setpoint" class="setpoint" x1="0" y1="0" x2="0" y2="0"></line>
+        <g id="needle" class="needle">
+          <line x1="200" y1="150" x2="200" y2="30"></line>
+        </g>
+        <circle class="hub" cx="200" cy="150" r="8"></circle>
+        <text class="scale-label left" x="52" y="157">0</text>
+        <text class="scale-label right" x="340" y="157">2.5x</text>
+      </svg>
+      <div class="readout">
+        <span id="pace" class="pace">0.0</span><span class="unit">/s</span>
+        <span id="over" class="over hidden">+</span>
+      </div>
+    </section>
+    <p id="metrics" class="metrics">pace 0.0/s, setpoint 0.0/s, step 0 of 5 normal</p>
+    <p id="reason" class="reason">waiting for chat</p>
+    <footer class="footer">
+      <div id="steps" class="steps" aria-label="current response step"></div>
+      <div id="rate" class="rate hidden" aria-label="rate limit remaining">
+        <div id="rate-fill" class="rate-fill"></div>
+      </div>
+    </footer>
+  </main>
+  <script type="module" src="/overlay.js"></script>
+</body>
+</html>
