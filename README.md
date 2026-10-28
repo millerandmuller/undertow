@@ -68,3 +68,24 @@ Add `--record path.jsonl` to `run` to record the four supported EventSub event
 types for later replay. Recorded files have `synthetic:false`. Chat display text
 is replaced with its character count; event ids, notice types, and required
 payload fields remain available to reproduce controller behavior.
+
+## Needle overlay for OBS
+
+The overlay is a local browser source, served only on `127.0.0.1`. Start a dry
+controller with `node src/cli.ts run --overlay 8787`, or use `--overlay` alone to
+select port 8787. Open `http://127.0.0.1:8787/` as an OBS Browser Source and set
+its width to 560 and height to 300. Add `?scale=1.5` to enlarge the card. The
+server closes with the run loop.
+
+For replay, use `node src/cli.ts replay replays/gift-wave.jsonl --profile loadtest
+--overlay 8787 --speed 20`. With an overlay, replay defaults to real time at
+`--speed 1`; `--speed 20` runs twenty times faster and `--speed max` is instant.
+Without an overlay, replay defaults to instant speed. Overlay replay supports one
+run only because each paced run needs its own open browser connection.
+
+The overlay labels live run pace as measured. Replay's dashed `SIMULATION` card
+shows the prominent simulation badge; when response modeling is on, its pace is
+labeled `modeled` and is a synthetic assumption, not a measurement. The only
+impact number shown in the demo comes from the live load test; modeled numbers are
+for testing controller behavior. A grey card and `reconnecting` reason indicate a
+lost local connection.
