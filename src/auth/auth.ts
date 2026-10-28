@@ -17,14 +17,14 @@ type DeviceResponse = {
   interval: number;
 };
 
-type ValidatePayload = {
+export type ValidateIdentity = {
   user_id: string;
   login: string;
   scopes: string[] | null;
 };
 
-type ValidateResponse = Omit<ValidatePayload, 'scopes'> & {
-  scopes: string[];
+type ValidatePayload = Omit<ValidateIdentity, 'scopes'> & {
+  scopes: string[] | null;
 };
 
 export type TokenResponse = {
@@ -35,7 +35,17 @@ export type TokenResponse = {
   token_type: string;
 };
 
-export type Tokens = TokenResponse & Partial<ValidateResponse>;
+export type Tokens = TokenResponse & Partial<ValidateIdentity>;
+
+export class TokenValidationError extends Error {
+  status: number;
+
+  constructor(status: number) {
+    super(`Token validation failed (${status})`);
+    this.name = 'TokenValidationError';
+    this.status = status;
+  }
+}
 
 export type DeviceLoginOptions = {
   fetcher?: typeof fetch;
@@ -56,16 +66,14 @@ export async function validateToken(
   _clientId: string,
   expectedLogin: string,
   fetcher: typeof fetch = fetch,
-): Promise<ValidateResponse> {
+): Promise<ValidateIdentity> {
   const response = await fetcher(VALIDATE_URL, {
     headers: { Authorization: `OAuth ${token}` },
   });
-  if (!response.ok) {
-    throw new Error(`Token validation failed (${response.status})`);
-  }
+  if (!response.ok) throw new TokenValidationError(response.status);
 
   const received = await response.json() as ValidatePayload;
-  const identity: ValidateResponse = { ...received, scopes: received.scopes ?? [] };
+  const identity: ValidateIdentity = { ...received, scopes: received.scopes ?? [] };
   if (identity.login.toLowerCase() !== expectedLogin.toLowerCase()) {
     throw new Error(
       `Authenticated login ${identity.login} does not match TWITCH_CHANNEL_LOGIN ${expectedLogin}`,
@@ -140,6 +148,52 @@ export async function deviceLogin(
     throw new Error(`Device token request failed: ${message ?? response.status}`);
   }
   throw new Error('Device code expired; run login again');
+}
+
+export async function validateStoredToken(
+  tokens: Tokens,
+  clientId: string,
+  expectedLogin: string,
+  persist: (tokens: Tokens) => Promise<void>,
+  fetcher: typeof fetch = fetch,
+  clientSecret?: string,
+): Promise<{ tokens: Tokens; identity: ValidateIdentity }> {
+  try {
+    const identity = await validateToken(
+      tokens.access_token,
+      clientId,
+      expectedLogin,
+      fetcher,
+    );
+    return { tokens, identity };
+  } catch (error) {
+    if (!(error instanceof TokenValidationError) || error.status !== 401) throw error;
+  }
+
+  if (!tokens.refresh_token) {
+    throw new Error('Access token expired and no refresh token is available; run npm run login');
+  }
+
+  let refreshed: Tokens;
+  try {
+    refreshed = await refreshTokens(tokens, clientId, persist, fetcher, clientSecret);
+  } catch {
+    throw new Error('Access token refresh failed; run npm run login');
+  }
+  try {
+    const identity = await validateToken(
+      refreshed.access_token,
+      clientId,
+      expectedLogin,
+      fetcher,
+    );
+    return { tokens: refreshed, identity };
+  } catch (error) {
+    if (error instanceof TokenValidationError && error.status === 401) {
+      throw new Error('Access token is still invalid after refresh; run npm run login');
+    }
+    throw error;
+  }
 }
 
 export async function refreshTokens(

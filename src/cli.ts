@@ -1,4 +1,4 @@
-import { deviceLogin, validateToken, type Tokens } from './auth/auth.ts';
+import { deviceLogin, validateStoredToken, type Tokens } from './auth/auth.ts';
 import { chatSettings, probeWithRestore, restoreBaseline } from './actuator/settings.ts';
 import { EventSub } from './eventsub/client.ts';
 import { loadConfig, selectedProfile } from './config.ts';
@@ -35,11 +35,20 @@ async function context() {
     throw new Error(`No Undertow tokens found at ${tokenPath}; run npm run login first`);
   }
   const { clientId, login } = config();
-  const identity = await validateToken(tokens.access_token, clientId, login);
-  Object.assign(tokens, identity);
+  const validated = await validateStoredToken(
+    tokens,
+    clientId,
+    login,
+    (next) => atomicJson(tokenPath, next),
+    fetch,
+    process.env.TWITCH_CLIENT_SECRET,
+  );
+  Object.assign(validated.tokens, validated.identity);
+  const activeTokens = validated.tokens;
+  const identity = validated.identity;
   const helix = new Helix(
     clientId,
-    tokens,
+    activeTokens,
     (next) => atomicJson(statePath('tokens.json'), next),
     { clientSecret: process.env.TWITCH_CLIENT_SECRET },
   );
@@ -97,6 +106,7 @@ async function run(): Promise<void> {
     profile,
     stateDirectory: stateDirectory(),
     dryRun: !live,
+    verbose: process.argv.includes('--verbose'),
   });
   stopRun = () => handle.stop();
   await handle.done;
