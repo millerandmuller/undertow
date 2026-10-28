@@ -13,8 +13,13 @@ export type ChatNotification = {
 };
 export type ChatSettingsNotification = {
   broadcaster_user_id: string;
-  slow_mode: boolean;
-  slow_mode_wait_time: number;
+  slow_mode?: boolean;
+  slow_mode_wait_time?: number;
+  follower_mode?: boolean;
+  follower_mode_duration?: number;
+  emote_mode?: boolean;
+  subscriber_mode?: boolean;
+  unique_chat_mode?: boolean;
 };
 export type RaidNotification = {
   from_broadcaster_user_id: string;
@@ -57,23 +62,23 @@ type EventSubEnvelope = {
 };
 type SocketMessage = { data: string };
 type SocketClose = { code: number };
-type SocketLike = {
+export type EventSubSocket = {
   readyState: number;
   onmessage: ((event: SocketMessage) => void) | null;
   onerror: ((event: unknown) => void) | null;
   onclose: ((event: SocketClose) => void) | null;
   close(): void;
 };
-type SocketConstructor = new (url: string) => SocketLike;
+export type EventSubSocketConstructor = new (url: string) => EventSubSocket;
 type SocketState = {
-  socket: SocketLike;
+  socket: EventSubSocket;
   mode: 'subscribe' | 'handover';
   welcomed: boolean;
   settled: boolean;
   intentionalClose: boolean;
   keepaliveTimer?: ReturnType<typeof setTimeout>;
   welcomeTimer?: ReturnType<typeof setTimeout>;
-  resolve: (socket: SocketLike) => void;
+  resolve: (socket: EventSubSocket) => void;
   reject: (error: Error) => void;
 };
 
@@ -103,13 +108,13 @@ export type EventSubOptions = {
 
 export class EventSub {
   readonly seen = new Set<string>();
-  readonly sockets: SocketLike[] = [];
-  active: SocketLike | null = null;
-  private states = new Map<SocketLike, SocketState>();
+  readonly sockets: EventSubSocket[] = [];
+  active: EventSubSocket | null = null;
+  private states = new Map<EventSubSocket, SocketState>();
   private helix: Helix;
   private broadcasterId: string;
   private onEvent: (event: UndertowEvent) => void;
-  private Socket: SocketConstructor;
+  private Socket: EventSubSocketConstructor;
   private log: (entry: unknown) => void;
   private closing = false;
   private welcomeDeadlineMs: number;
@@ -119,7 +124,7 @@ export class EventSub {
     helix: Helix,
     broadcasterId: string,
     onEvent: (event: UndertowEvent) => void,
-    socketConstructor: SocketConstructor = WebSocket,
+    socketConstructor: EventSubSocketConstructor = WebSocket,
     log: (entry: unknown) => void = console.log,
     options: EventSubOptions = {},
   ) {
@@ -137,7 +142,7 @@ export class EventSub {
     this.active = socket;
   }
 
-  private openSocket(url: string, mode: SocketState['mode']): Promise<SocketLike> {
+  private openSocket(url: string, mode: SocketState['mode']): Promise<EventSubSocket> {
     if (this.sockets.length >= MAX_SOCKETS) {
       return Promise.reject(new Error('EventSub connection limit reached'));
     }

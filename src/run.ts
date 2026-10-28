@@ -1,0 +1,401 @@
+import { access, appendFile, mkdir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import {
+  chatSettings,
+  restoreBaseline,
+  saveBaseline,
+  type ChatSettings,
+  type ChatSettingsPatch,
+} from './actuator/settings.ts';
+import { ChatSender } from './chat/send.ts';
+import type { ProfileConfig } from './config.ts';
+import {
+  decide,
+  initialControllerState,
+  type ControllerAction,
+  type ControllerState,
+} from './controller/controller.ts';
+import { createPaceState, rate, record, type PaceState } from './controller/pace.ts';
+import {
+  actionNotice,
+  warningNotice,
+  type Notice,
+} from './notices/notices.ts';
+import {
+  EventSub,
+  type EventSubSocketConstructor,
+  type ChatMessageNotification,
+  type ChatNotification,
+  type ChatSettingsNotification,
+  type UndertowEvent,
+} from './eventsub/client.ts';
+import { readJson } from './util/files.ts';
+import type { Helix } from './util/helix.ts';
+
+type DisplayListener = (state: DisplayState) => void;
+export type DisplayState = {
+  pace: number;
+  setpoint: number;
+  step: number;
+  lastReason: string;
+  subscribe(listener: DisplayListener): () => void;
+  publish(next: Pick<DisplayState, 'pace' | 'setpoint' | 'step' | 'lastReason'>): void;
+};
+
+export function createDisplayState(setpoint: number): DisplayState {
+  const listeners = new Set<DisplayListener>();
+  const display: DisplayState = {
+    pace: 0,
+    setpoint,
+    step: 0,
+    lastReason: 'starting',
+    subscribe(listener) {
+      listeners.add(listener);
+      listener(display);
+      return () => listeners.delete(listener);
+    },
+    publish(next) {
+      Object.assign(display, next);
+      for (const listener of listeners) listener(display);
+    },
+  };
+  return display;
+}
+
+export type RunOptions = {
+  helix: Helix;
+  broadcasterId: string;
+  profile: ProfileConfig;
+  stateDirectory: string;
+  dryRun: boolean;
+  log?: (entry: unknown) => void;
+  socketConstructor?: EventSubSocketConstructor;
+};
+
+export type RunHandle = {
+  display: DisplayState;
+  done: Promise<void>;
+  stop(): Promise<void>;
+};
+type RunLog = {
+  t: string;
+  pace: number;
+  setpoint: number;
+  step: number;
+  action: string;
+  reason: string;
+  reply_id: string | null;
+  ratelimit_remaining: string | null;
+};
+
+const PATCH_KEYS: (keyof ChatSettings)[] = [
+  'slow_mode', 'slow_mode_wait_time', 'follower_mode', 'follower_mode_duration',
+  'emote_mode', 'subscriber_mode', 'unique_chat_mode',
+];
+
+function eventPatch(event: ChatSettingsNotification): ChatSettingsPatch {
+  const patch: ChatSettingsPatch = {};
+  for (const key of PATCH_KEYS) {
+    const value = event[key];
+    if (value !== undefined) Object.assign(patch, { [key]: value });
+  }
+  return patch;
+}
+
+function matchesExpected(patch: ChatSettingsPatch, expected: ChatSettings): boolean {
+  const keys = Object.keys(patch) as (keyof ChatSettings)[];
+  return keys.length > 0 && keys.every((key) => patch[key] === expected[key]);
+}
+
+function restoreSnapshot(
+  current: ChatSettings,
+  baseline: ChatSettings,
+): ChatSettings {
+  const next = {
+    ...current,
+    slow_mode: baseline.slow_mode,
+    follower_mode: baseline.follower_mode,
+    emote_mode: baseline.emote_mode,
+  };
+  if (baseline.slow_mode) next.slow_mode_wait_time = baseline.slow_mode_wait_time;
+  if (baseline.follower_mode) {
+    next.follower_mode_duration = baseline.follower_mode_duration;
+  }
+  return next;
+}
+
+function patchSnapshot(current: ChatSettings, patch: ChatSettingsPatch): ChatSettings {
+  return { ...current, ...patch };
+}
+
+function actionPatch(
+  action: ControllerAction,
+  profile: ProfileConfig,
+): ChatSettingsPatch | null {
+  if (action.type === 'step_up' || action.type === 'step_down') {
+    return profile.ladder[action.step - 1]?.patch ?? null;
+  }
+  return null;
+}
+
+function reasonFor(action: ControllerAction, notice: Notice | null): string {
+  if (notice) return notice.message;
+  if (action.type === 'yield') return 'manual override';
+  if (action.type === 'none') return 'holding current settings';
+  if (action.type === 'step_down') return `step down to ${action.step}`;
+  return `step up to ${action.step}`;
+}
+
+async function writeLog(path: string, entry: RunLog): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await appendFile(path, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+}
+
+function isGift(event: ChatNotification): boolean {
+  return event.notice_type.includes('gift');
+}
+
+function activeSetpoint(
+  nowMs: number,
+  warningAt: number | null,
+  profile: ProfileConfig,
+): number {
+  const warningActive = warningAt !== null &&
+    nowMs - warningAt <= profile.warning_hold_s * 1000;
+  return warningActive
+    ? profile.setpoint_msgs_per_s / profile.warning_boost
+    : profile.setpoint_msgs_per_s;
+}
+
+function isLoginFailure(message: string): boolean {
+  return message.includes('401') || message.includes('Token refresh failed');
+}
+
+export async function startRun(options: RunOptions): Promise<RunHandle> {
+  const logger = options.log ?? console.log;
+  const settingsApi = chatSettings(options.helix, options.broadcasterId);
+  const baselinePath = join(options.stateDirectory, 'baseline.json');
+  const logPath = join(options.stateDirectory, 'storm.log.jsonl');
+  let baseline: ChatSettings;
+  try {
+    await access(baselinePath);
+    baseline = await readJson<ChatSettings>(baselinePath);
+  } catch {
+    baseline = await settingsApi.get();
+    await saveBaseline(baselinePath, baseline);
+  }
+  let expected = await settingsApi.get();
+  let paceState: PaceState = createPaceState(options.profile.window_s);
+  let controller: ControllerState = initialControllerState();
+  let warningAt: number | null = null;
+  let overrideUntilMs = 0;
+  let lastMessageId: string | null = null;
+  let stopped = false;
+  let paused = false;
+  let retryAfterMs = 0;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let tickInFlight: Promise<void> | null = null;
+  let resolveDone: (() => void) = () => undefined;
+  const done = new Promise<void>((resolve) => { resolveDone = resolve; });
+  const display = createDisplayState(options.profile.setpoint_msgs_per_s);
+  const sender = new ChatSender(options.helix, options.broadcasterId, { log: logger });
+
+  const restore = async (): Promise<void> => {
+    if (options.dryRun) return;
+    expected = restoreSnapshot(expected, baseline);
+    expected = await restoreBaseline(settingsApi, baselinePath);
+  };
+
+  const eventSub = new EventSub(
+    options.helix,
+    options.broadcasterId,
+    (event) => { void processEvent(event); },
+    options.socketConstructor ?? WebSocket,
+    logger,
+  );
+
+  let stopOperation: Promise<void> | null = null;
+  const stop = (): Promise<void> => {
+    if (stopOperation) return stopOperation;
+    stopped = true;
+    if (timer) clearInterval(timer);
+    eventSub.close();
+    stopOperation = (async () => {
+      try {
+        if (tickInFlight) await tickInFlight.catch(() => undefined);
+        await restore();
+      } catch (error) {
+        logger({ type: 'restore_failed', message: errorMessage(error) });
+      } finally {
+        resolveDone();
+      }
+    })();
+    return stopOperation;
+  };
+
+  async function sendNotice(notice: Notice | null): Promise<void> {
+    if (!notice || options.dryRun || !lastMessageId) return;
+    await sender.send(notice.message, lastMessageId);
+  }
+
+  async function processManualSettings(event: ChatSettingsNotification): Promise<void> {
+    const patch = eventPatch(event);
+    if (matchesExpected(patch, expected)) return;
+    const nowMs = Date.now();
+    overrideUntilMs = nowMs + options.profile.override_hold_s * 1000;
+    controller = { ...initialControllerState(), lastMoveMs: nowMs };
+    logger({ type: 'manual_settings_change', override_until_ms: overrideUntilMs });
+    await restore();
+  }
+
+  async function processEvent(event: UndertowEvent): Promise<void> {
+    try {
+      const nowMs = Date.now();
+      if (event.type === 'channel.chat.message') {
+        const message = event.event as ChatMessageNotification;
+        lastMessageId = message.message_id;
+        paceState = record(paceState, nowMs);
+      } else if (event.type === 'channel.chat.notification') {
+        const notice = event.event as ChatNotification;
+        if (isGift(notice)) {
+          warningAt = nowMs;
+          const notice = warningNotice(
+            'gift',
+            rate(paceState, nowMs),
+            controller.step,
+            options.profile,
+          );
+          await sendNotice(notice);
+        }
+      } else if (event.type === 'channel.raid') {
+        warningAt = nowMs;
+        const notice = warningNotice(
+          'raid',
+          rate(paceState, nowMs),
+          controller.step,
+          options.profile,
+        );
+        await sendNotice(notice);
+      } else if (event.type === 'channel.chat_settings.update') {
+        await processManualSettings(event.event as ChatSettingsNotification);
+      }
+    } catch (error) {
+      const message = errorMessage(error);
+      if (isLoginFailure(message)) {
+        paused = true;
+        logger({ type: 'login_needed' });
+      } else {
+        logger({ type: 'event_error', message });
+        await stop();
+      }
+    }
+  }
+
+  function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : 'Unexpected run error';
+  }
+
+  async function apply(action: ControllerAction): Promise<void> {
+    if (options.dryRun || action.type === 'none' || action.type === 'yield') return;
+    if (action.type === 'restore') {
+      expected = await restoreBaseline(settingsApi, baselinePath);
+      return;
+    }
+    const patch = actionPatch(action, options.profile);
+    if (!patch) return;
+    const previousExpected = expected;
+    expected = patchSnapshot(expected, patch);
+    try {
+      await settingsApi.update(patch);
+    } catch (error) {
+      expected = previousExpected;
+      throw error;
+    }
+  }
+
+  async function tick(): Promise<void> {
+    if (stopped) return;
+    const nowMs = Date.now();
+    const pace = rate(paceState, nowMs);
+    const decision = paused
+      ? { state: controller, action: { type: 'yield' as const } }
+      : nowMs < retryAfterMs
+      ? { state: controller, action: { type: 'none' as const } }
+      : decide(controller, {
+        nowMs,
+        rate: pace,
+        warnings: warningAt,
+        manualOverrideUntilMs: overrideUntilMs,
+      }, options.profile);
+    const notice = actionNotice(decision.action, options.profile, pace);
+    let reason = paused ? 'login needed' : reasonFor(decision.action, notice);
+    if (!paused && nowMs < retryAfterMs) reason = 'waiting before retrying failed setting change';
+    if (decision.action.type === 'none' || decision.action.type === 'yield') {
+      controller = decision.state;
+    } else {
+      if (options.dryRun) logger({ type: 'dry_action', action: decision.action });
+      try {
+        await apply(decision.action);
+        controller = decision.state;
+        if (notice) {
+          try {
+            await sendNotice(notice);
+          } catch (error) {
+            const message = errorMessage(error);
+            if (isLoginFailure(message)) {
+              paused = true;
+              reason = 'login needed';
+              logger({ type: 'login_needed' });
+            } else {
+              reason = `settings changed; reply failed: ${message}`;
+              logger({ type: 'reply_failed', message });
+            }
+          }
+        }
+      } catch (error) {
+        const message = errorMessage(error);
+        if (isLoginFailure(message)) {
+          paused = true;
+          reason = 'login needed';
+          logger({ type: 'login_needed' });
+        } else {
+          retryAfterMs = nowMs + options.profile.dwell_s * 1000;
+          reason = `setting change failed: ${message}`;
+          logger({ type: 'action_failed', message });
+        }
+      }
+    }
+    const setpoint = activeSetpoint(nowMs, warningAt, options.profile);
+    display.publish({
+      pace,
+      setpoint,
+      step: controller.step,
+      lastReason: reason,
+    });
+    await writeLog(logPath, {
+      t: new Date(nowMs).toISOString(),
+      pace,
+      setpoint,
+      step: controller.step,
+      action: options.dryRun ? `dry_${decision.action.type}` : decision.action.type,
+      reason,
+      reply_id: lastMessageId,
+      ratelimit_remaining: options.helix.remaining,
+    });
+  }
+
+  await eventSub.connect();
+  timer = setInterval(() => {
+    if (tickInFlight || stopped) return;
+    tickInFlight = tick();
+    void tickInFlight.catch((error: unknown) => {
+      logger({ type: 'fatal_run_error', message: errorMessage(error) });
+      void stop();
+    }).finally(() => { tickInFlight = null; });
+  }, 1000);
+  return {
+    display,
+    done,
+    stop,
+  };
+}

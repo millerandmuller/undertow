@@ -1,12 +1,22 @@
 import { deviceLogin, validateToken, type Tokens } from './auth/auth.ts';
 import { chatSettings, probeWithRestore, restoreBaseline } from './actuator/settings.ts';
 import { EventSub } from './eventsub/client.ts';
+import { loadConfig, selectedProfile } from './config.ts';
+import { startRun } from './run.ts';
 import { Helix } from './util/helix.ts';
 import { atomicJson, readJson } from './util/files.ts';
 
-const tokenFile = '.undertow/tokens.json';
-const baselineFile = '.undertow/baseline.json';
+function stateDirectory(): string {
+  return process.env.UNDERTOW_STATE_DIR ?? '.undertow';
+}
+
+function statePath(name: string): string {
+  return `${stateDirectory()}/${name}`;
+}
+
+const baselineFile = statePath('baseline.json');
 let eventSub: EventSub | undefined;
+let stopRun: (() => Promise<void>) | undefined;
 
 function config(): { clientId: string; login: string } {
   const clientId = process.env.TWITCH_CLIENT_ID;
@@ -17,14 +27,20 @@ function config(): { clientId: string; login: string } {
 }
 
 async function context() {
+  const tokenPath = statePath('tokens.json');
+  let tokens: Tokens;
+  try {
+    tokens = await readJson<Tokens>(tokenPath);
+  } catch {
+    throw new Error(`No Undertow tokens found at ${tokenPath}; run npm run login first`);
+  }
   const { clientId, login } = config();
-  const tokens = await readJson<Tokens>(tokenFile);
   const identity = await validateToken(tokens.access_token, clientId, login);
   Object.assign(tokens, identity);
   const helix = new Helix(
     clientId,
     tokens,
-    (next) => atomicJson(tokenFile, next),
+    (next) => atomicJson(statePath('tokens.json'), next),
     { clientSecret: process.env.TWITCH_CLIENT_SECRET },
   );
   return {
@@ -43,7 +59,7 @@ async function login(): Promise<void> {
   const tokens = await deviceLogin(
     clientId,
     expectedLogin,
-    (value) => atomicJson(tokenFile, value),
+    (value) => atomicJson(statePath('tokens.json'), value),
     { onCode: (code, uri) => console.log(`Open ${uri} and enter code ${code}`) },
   );
   console.log(`Validated ${tokens.login}; scopes: ${tokens.scope.join(', ')}`);
@@ -68,6 +84,24 @@ async function probe(): Promise<void> {
   console.log(`Ratelimit-Remaining: ${helix.remaining}`);
 }
 
+async function run(): Promise<void> {
+  const { helix, identity } = await context();
+  const profile = await loadConfig(selectedProfile(process.argv.slice(3)));
+  const live = process.argv.includes('--live');
+  if (live && process.argv.includes('--dry')) {
+    throw new Error('Choose either --dry or --live');
+  }
+  const handle = await startRun({
+    helix,
+    broadcasterId: identity.user_id,
+    profile,
+    stateDirectory: stateDirectory(),
+    dryRun: !live,
+  });
+  stopRun = () => handle.stop();
+  await handle.done;
+}
+
 async function restore(): Promise<void> {
   const { api } = await context();
   printJson(await restoreBaseline(api, baselineFile));
@@ -88,12 +122,18 @@ async function watch(): Promise<void> {
 }
 
 process.once('SIGINT', () => {
-  eventSub?.close();
-  process.exit(130);
+  void (async () => {
+    await stopRun?.();
+    eventSub?.close();
+    process.exit(130);
+  })();
 });
 process.once('SIGTERM', () => {
-  eventSub?.close();
-  process.exit(143);
+  void (async () => {
+    await stopRun?.();
+    eventSub?.close();
+    process.exit(143);
+  })();
 });
 
 try {
@@ -102,8 +142,10 @@ try {
   else if (command === 'probe') await probe();
   else if (command === 'restore') await restore();
   else if (command === 'watch') await watch();
-  else throw new Error('Usage: node src/cli.ts <login|probe|watch|restore>');
+  else if (command === 'run') await run();
+  else throw new Error('Usage: node src/cli.ts <login|probe|watch|restore|run>');
 } catch (error) {
+  await stopRun?.();
   eventSub?.close();
   console.error(error instanceof Error ? error.message : 'Undertow failed');
   process.exitCode = 1;
