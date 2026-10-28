@@ -5,6 +5,7 @@ import { loadConfig, selectedProfile } from './config.ts';
 import { startRun } from './run.ts';
 import { Helix } from './util/helix.ts';
 import { atomicJson, readJson } from './util/files.ts';
+import { replayCommand } from './sim/command.ts';
 
 function stateDirectory(): string {
   return process.env.UNDERTOW_STATE_DIR ?? '.undertow';
@@ -107,9 +108,15 @@ async function run(): Promise<void> {
     stateDirectory: stateDirectory(),
     dryRun: !live,
     verbose: process.argv.includes('--verbose'),
+    recordPath: recordPath(),
   });
   stopRun = () => handle.stop();
   await handle.done;
+}
+
+function recordPath(): string | undefined {
+  const index = process.argv.indexOf('--record');
+  return index < 0 ? undefined : process.argv[index + 1];
 }
 
 async function restore(): Promise<void> {
@@ -153,7 +160,10 @@ try {
   else if (command === 'restore') await restore();
   else if (command === 'watch') await watch();
   else if (command === 'run') await run();
-  else throw new Error('Usage: node src/cli.ts <login|probe|watch|restore|run>');
+  else if (command === 'replay') await replayCommand(process.argv.slice(3));
+  else {
+    throw new Error('Usage: node src/cli.ts <login|probe|watch|restore|run|replay>');
+  }
 } catch (error) {
   await stopRun?.();
   eventSub?.close();
