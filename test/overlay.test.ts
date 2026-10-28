@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createDisplayState } from '../src/run.ts';
 import { startOverlayServer } from '../src/overlay/server.ts';
-import { paceAngle, stepDots } from '../src/overlay/public/gauge.js';
+import {
+  GAUGE_HUB,
+  GAUGE_RADIUS,
+  arcPath,
+  labelAnchor,
+  paceAngle,
+  pointOnArc,
+  stepDots,
+  tickEndpoints,
+} from '../src/overlay/public/gauge.js';
 import { simulationOverlayOptions } from '../src/sim/overlay-state.ts';
 
 async function nextText(
@@ -24,6 +34,42 @@ test('gauge math maps range, clamps, and handles invalid input', () => {
   assert.deepEqual(stepDots(3), [true, true, true, false, false]);
   assert.deepEqual(stepDots(9), [true, true, true, true, true]);
   assert.deepEqual(stepDots(Number.NaN), [false, false, false, false, false]);
+});
+
+test('gauge geometry draws the dome and shares its arc with the needle and tick', async () => {
+  const htmlPath = new URL('../src/overlay/public/index.html', import.meta.url);
+  const cssPath = new URL('../src/overlay/public/overlay.css', import.meta.url);
+  const html = await readFile(htmlPath, 'utf8');
+  const css = await readFile(cssPath, 'utf8');
+  assert.equal(arcPath(), 'M 60 145 A 140 140 0 0 1 340 145');
+  const zero = pointOnArc(0, 2);
+  assert.ok(Math.abs(zero.x - 60) < 1e-8);
+  assert.ok(Math.abs(zero.y - 145) < 1e-8);
+  assert.ok(Math.abs(pointOnArc(5, 2).x - 340) < 1e-8);
+  const pace = pointOnArc(2, 2);
+  const tick = tickEndpoints(2, 2);
+  assert.ok(Math.abs(paceAngle(2, 2) - 108) < 1e-8);
+  assert.ok(Math.abs(180 - paceAngle(2, 2) - 72) < 1e-8);
+  assert.ok(Math.abs(tick.outer.x - GAUGE_HUB.x -
+    (pace.x - GAUGE_HUB.x) * 148 / GAUGE_RADIUS) < 1e-8);
+  assert.ok(Math.abs(tick.outer.y - GAUGE_HUB.y -
+    (pace.y - GAUGE_HUB.y) * 148 / GAUGE_RADIUS) < 1e-8);
+  const needleOnTick = pointOnArc(2, 2);
+  assert.ok(Math.hypot(
+    needleOnTick.x - pace.x,
+    needleOnTick.y - pace.y,
+  ) < 1e-8);
+  assert.ok(Math.abs(pointOnArc(100, 2).x - 340) < 1e-8);
+  assert.equal(labelAnchor(2, 2).x < GAUGE_HUB.x, true);
+  assert.ok(Number.isFinite(pointOnArc(Number.NaN, 2).x));
+  assert.match(html, /A 140 140 0 0 1 340 145/);
+  assert.doesNotMatch(css, /\.metrics\s*\{[^}]*position:\s*absolute/s);
+  assert.doesNotMatch(css, /\.reason\s*\{[^}]*position:\s*absolute/s);
+  assert.doesNotMatch(css, /position:\s*absolute/);
+  assert.match(css, /width: 520px;/);
+  assert.match(css, /transform: scale\(var\(--scale\)\)/);
+  assert.match(css, /width: calc\(560px \* var\(--scale\)\)/);
+  assert.match(css, /\.gauge\s*\{[^}]*flex: 0 0 128px/s);
 });
 
 test('simulation projection labels modeled pace without changing the run state', () => {
