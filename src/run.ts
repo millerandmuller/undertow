@@ -150,9 +150,20 @@ function patchSnapshot(current: ChatSettings, patch: ChatSettingsPatch): ChatSet
 function actionPatch(
   action: ControllerAction,
   profile: ProfileConfig,
+  currentStep: number,
 ): ChatSettingsPatch | null {
   if (action.type === 'step_up' || action.type === 'step_down') {
-    return profile.ladder[action.step - 1]?.patch ?? null;
+    const targetPatch = profile.ladder[action.step - 1]?.patch;
+    if (!targetPatch) return null;
+    const patch = { ...targetPatch };
+    if (action.type === 'step_down') {
+      for (let level = currentStep; level > action.step; level -= 1) {
+        const kind = profile.ladder[level - 1]?.kind;
+        if (kind === 'emote') patch.emote_mode = false;
+        if (kind === 'followers') patch.follower_mode = false;
+      }
+    }
+    return patch;
   }
   return null;
 }
@@ -420,7 +431,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       expected = await restoreBaseline(settingsApi, baselinePath);
       return;
     }
-    const patch = actionPatch(action, options.profile);
+    const patch = actionPatch(action, options.profile, controller.step);
     if (!patch) return;
     const previousExpected = expected;
     expected = patchSnapshot(expected, patch);

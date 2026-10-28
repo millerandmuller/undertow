@@ -2,7 +2,7 @@ import type { LadderStep, ProfileConfig } from '../config.ts';
 import type { ControllerAction } from '../controller/controller.ts';
 
 export type Notice = {
-  kind: 'step_up' | 'warning' | 'restore';
+  kind: 'step_up' | 'step_down' | 'warning' | 'restore';
   message: string;
   overlayText: string;
 };
@@ -50,6 +50,22 @@ export function warningNotice(
   });
 }
 
+export function stepDownNotice(
+  step: LadderStep,
+  stepNumber: number,
+  pace: number,
+  config: ProfileConfig,
+): Notice {
+  const message = `Easing to ${step.label.toLowerCase()}: chat is at ${pace} msgs/s. ` +
+    `Next step down when it stays ${releaseCondition(config)}.`;
+  return bounded({
+    kind: 'step_down',
+    message,
+    overlayText: `pace ${pace}/s, setpoint ${config.setpoint_msgs_per_s}/s, ` +
+      `step ${stepNumber} of ${config.ladder.length}`,
+  });
+}
+
 export function restoreNotice(
   pace: number,
   stepNumber: number,
@@ -71,6 +87,10 @@ export function actionNotice(
   if (action.type === 'step_up') {
     const step = config.ladder[action.step - 1];
     return step ? stepUpNotice(step, action.step, pace, config) : null;
+  }
+  if (action.type === 'step_down') {
+    const step = config.ladder[action.step - 1];
+    return step ? stepDownNotice(step, action.step, pace, config) : null;
   }
   if (action.type === 'restore') return restoreNotice(pace, 0, config);
   return null;

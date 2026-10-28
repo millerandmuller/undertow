@@ -5,6 +5,7 @@ import test from 'node:test';
 import { loadConfig, selectedProfile } from '../src/config.ts';
 import {
   restoreNotice,
+  stepDownNotice,
   stepUpNotice,
   warningNotice,
 } from '../src/notices/notices.ts';
@@ -19,6 +20,7 @@ test('config loads named profiles and validates their ladder', async () => {
     'slow', 'slow', 'slow', 'followers', 'emote',
   ]);
   assert.equal(loadtest.setpoint_msgs_per_s, 2);
+  assert.equal(loadtest.dwell_s, 15);
   await assert.rejects(loadConfig('other'), /must be real or loadtest/);
 });
 
@@ -64,12 +66,21 @@ test('notice strings are plain sentences within chat limit', () => {
   const gift = warningNotice('gift', 14, 2, profile);
   const raid = warningNotice('raid', 14, 2, profile);
   const restore = restoreNotice(2, 0, profile);
+  const easingSlow = stepDownNotice(profile.ladder[1], 2, 2.4, profile);
+  const easingFollowers = stepDownNotice(profile.ladder[3], 4, 3.1, profile);
   assert.equal(step.message, 'Slow mode 10 s: chat hit 14 msgs/s. Back to normal when it drops ' +
     'under 3 msgs/s for 30 s.');
   assert.match(gift.message, /a gift wave is landing/);
   assert.match(raid.message, /a raid is landing/);
   assert.equal(restore.message, 'Chat is back to normal. Settings restored.');
-  for (const notice of [step, gift, raid, restore]) {
+  assert.equal(
+    easingSlow.message,
+    'Easing to slow mode 10 s: chat is at 2.4 msgs/s. ' +
+      'Next step down when it stays under 3 msgs/s for 30 s.',
+  );
+  assert.match(easingFollowers.message, /followers-only 10 min/);
+  assert.match(easingFollowers.overlayText, /step 4 of 5/);
+  for (const notice of [step, easingSlow, easingFollowers, gift, raid, restore]) {
     assert.ok(notice.message.length <= 500);
     assert.equal(notice.message.endsWith('.'), true);
     assert.equal(notice.overlayText, notice.overlayText.toLowerCase());
