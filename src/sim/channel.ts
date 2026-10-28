@@ -79,6 +79,7 @@ function jsonResponse(value: unknown): Response {
     headers: {
       'content-type': 'application/json',
       'ratelimit-remaining': '1000',
+      'ratelimit-limit': '1000',
       'ratelimit-reset': '0',
     },
   });

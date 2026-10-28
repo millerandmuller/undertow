@@ -9,6 +9,11 @@ type ScheduledTask = {
 export class SimulatedClock implements RunClock {
   private timeMs = 0;
   private tasks = new Set<ScheduledTask>();
+  private beforeTick: (intervalMs: number) => Promise<void>;
+
+  constructor(beforeTick: (intervalMs: number) => Promise<void> = async () => undefined) {
+    this.beforeTick = beforeTick;
+  }
 
   now(): number {
     return this.timeMs;
@@ -30,6 +35,7 @@ export class SimulatedClock implements RunClock {
         .filter((task) => task.nextAt <= targetMs)
         .sort((left, right) => left.nextAt - right.nextAt)[0];
       if (!next) break;
+      await this.beforeTick(next.interval);
       this.timeMs = next.nextAt;
       next.nextAt += next.interval;
       await next.callback();

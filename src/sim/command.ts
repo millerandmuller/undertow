@@ -2,9 +2,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../config.ts';
-import { runReplay, writeLastReplay, type ReplayResult } from './driver.ts';
+import {
+  runReplay,
+  writeLastReplay,
+  type ReplayDriverOptions,
+  type ReplayResult,
+} from './driver.ts';
 import { loadReplay } from './replay.ts';
 import { labelRateText, loadResponseModel } from './response-model.ts';
+import { startOverlayServer } from '../overlay/server.ts';
+import { simulationOverlayOptions } from './overlay-state.ts';
 
 function option(args: string[], name: string, fallback: string): string {
   const index = args.indexOf(name);
@@ -125,10 +132,13 @@ async function runFreshSimulation(
   profile: Awaited<ReturnType<typeof loadConfig>>,
   tailSeconds: number,
   model: Awaited<ReturnType<typeof loadResponseModel>> | null,
+  driverOptions: ReplayDriverOptions = {},
 ): Promise<ReplayResult> {
   const directory = await mkdtemp(join(tmpdir(), 'undertow-replay-'));
   try {
-    return await runReplay(replay, profile, directory, tailSeconds, undefined, model);
+    return await runReplay(
+      replay, profile, directory, tailSeconds, undefined, model, driverOptions,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -157,6 +167,24 @@ export async function replayCommand(args: string[]): Promise<void> {
   }
   const modelEnabled = replay.header.synthetic && modelOption === 'on';
   const model = modelEnabled ? await loadResponseModel() : null;
+  const overlayIndex = args.indexOf('--overlay');
+  const overlayRequested = overlayIndex >= 0;
+  const portText = overlayRequested ? args[overlayIndex + 1] : undefined;
+  const overlayPort = !overlayRequested || !portText || portText.startsWith('--')
+    ? 8787
+    : Number(portText);
+  if (overlayRequested && (!Number.isInteger(overlayPort) ||
+    overlayPort < 0 || overlayPort > 65535)) {
+    throw new Error('--overlay port must be an integer from 0 to 65535');
+  }
+  if (overlayRequested && runCount > 1) {
+    throw new Error('--overlay cannot be combined with --runs greater than 1');
+  }
+  const speedText = option(args, '--speed', overlayRequested ? '1' : 'max');
+  const speed = speedText === 'max' ? undefined : Number(speedText);
+  if (speed !== undefined && (!Number.isFinite(speed) || speed <= 0)) {
+    throw new Error('--speed must be a positive number or max');
+  }
   console.log(`SIMULATION (replay of ${file}, no Twitch connection)`);
   if (modelEnabled) {
     console.log('RESPONSE MODEL: synthetic assumption, not measured ' +
@@ -168,15 +196,35 @@ export async function replayCommand(args: string[]): Promise<void> {
   }
   let first: ReplayResult | null = null;
   let last: ReplayResult | null = null;
-  for (let index = 0; index < runCount; index += 1) {
-    const result = await runFreshSimulation(replay, profile, tailSeconds, model);
-    if (first && !sameDecisions(first, result)) {
-      console.error(firstDifference(first, result));
-      process.exitCode = 1;
-      return;
+  let overlay: Awaited<ReturnType<typeof startOverlayServer>> | undefined;
+  const driverOptions: ReplayDriverOptions = {
+    speed: runCount > 1 ? undefined : speed,
+  };
+  if (overlayRequested) {
+    driverOptions.onDisplay = async (display) => {
+      overlay = await startOverlayServer(
+        display,
+        overlayPort,
+        simulationOverlayOptions(modelEnabled),
+      );
+      console.log(`overlay: ${overlay.url}`);
+    };
+  }
+  try {
+    for (let index = 0; index < runCount; index += 1) {
+      const result = await runFreshSimulation(
+        replay, profile, tailSeconds, model, driverOptions,
+      );
+      if (first && !sameDecisions(first, result)) {
+        console.error(firstDifference(first, result));
+        process.exitCode = 1;
+        return;
+      }
+      first ??= result;
+      last = result;
     }
-    first ??= result;
-    last = result;
+  } finally {
+    await overlay?.stop();
   }
   if (!last) throw new Error('Replay did not run');
   report(last);

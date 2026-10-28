@@ -5,6 +5,7 @@ import { loadConfig, selectedProfile } from './config.ts';
 import { startRun } from './run.ts';
 import { Helix } from './util/helix.ts';
 import { atomicJson, readJson } from './util/files.ts';
+import { startOverlayServer } from './overlay/server.ts';
 
 function stateDirectory(): string {
   return process.env.UNDERTOW_STATE_DIR ?? '.undertow';
@@ -94,6 +95,7 @@ async function probe(): Promise<void> {
 }
 
 async function run(): Promise<void> {
+  const port = requestedOverlayPort(process.argv.slice(3));
   const { helix, identity } = await context();
   const profile = await loadConfig(selectedProfile(process.argv.slice(3)));
   const live = process.argv.includes('--live');
@@ -109,8 +111,33 @@ async function run(): Promise<void> {
     verbose: process.argv.includes('--verbose'),
     recordPath: recordPath(),
   });
-  stopRun = () => handle.stop();
+  let overlay: Awaited<ReturnType<typeof startOverlayServer>> | undefined;
+  stopRun = async () => {
+    await handle.stop();
+    await overlay?.stop();
+  };
+  if (port !== null) {
+    try {
+      overlay = await startOverlayServer(handle.display, port);
+      console.log(`overlay: ${overlay.url}`);
+    } catch (error) {
+      throw error;
+    }
+  }
   await handle.done;
+  await stopRun?.();
+}
+
+function requestedOverlayPort(args: string[]): number | null {
+  const index = args.indexOf('--overlay');
+  if (index < 0) return null;
+  const value = args[index + 1];
+  if (!value || value.startsWith('--')) return 8787;
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error('--overlay port must be an integer from 0 to 65535');
+  }
+  return port;
 }
 
 function recordPath(): string | undefined {

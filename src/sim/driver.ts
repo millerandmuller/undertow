@@ -4,7 +4,7 @@ import type { ChatSettings, ChatSettingsPatch } from '../actuator/settings.ts';
 import { saveBaseline } from '../actuator/settings.ts';
 import type { ProfileConfig } from '../config.ts';
 import type { ChatSettingsNotification } from '../eventsub/client.ts';
-import { startRun, type RunLog } from '../run.ts';
+import { startRun, type DisplayState, type RunLog } from '../run.ts';
 import { SimulatedClock } from './clock.ts';
 import { SimulatedChannel } from './channel.ts';
 import {
@@ -19,6 +19,11 @@ import {
 } from './response-model.ts';
 
 type ReplayDecision = RunLog & { offset_ms: number };
+export type ReplayDriverOptions = {
+  speed?: number;
+  sleep?: (milliseconds: number) => Promise<void>;
+  onDisplay?: (display: DisplayState) => Promise<void> | void;
+};
 export type ReplayResult = {
   decisions: ReplayDecision[];
   replies: { message: string; parent_id: string | null }[];
@@ -48,11 +53,17 @@ export async function runReplay(
   tailSeconds = 90,
   reconnectAtMs?: number,
   responseModel: ResponseModel | null = null,
+  options: ReplayDriverOptions = {},
 ): Promise<ReplayResult> {
   await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
   await rm(join(stateDirectory, 'storm.log.jsonl'), { force: true });
   await saveBaseline(join(stateDirectory, 'baseline.json'), replay.header.baseline);
-  const clock = new SimulatedClock();
+  const sleep = options.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => {
+    setTimeout(resolve, milliseconds);
+  }));
+  const clock = new SimulatedClock(async (intervalMs) => {
+    if (options.speed !== undefined) await sleep(intervalMs / options.speed);
+  });
   resetSimulatedSockets();
   const channel = new SimulatedChannel(replay.header.baseline);
   const helix = channel.createHelix();
@@ -66,35 +77,39 @@ export async function runReplay(
     clock,
     log: () => undefined,
   });
-  let didReconnect = false;
   const recordedMessageOffsets: number[] = [];
   const simulatedMessageOffsets: number[] = [];
-  for (let index = 0; index < replay.events.length; index += 1) {
-    const item = replay.events[index];
-    await clock.advanceTo(item.at_ms);
-    if (!didReconnect && reconnectAtMs !== undefined && item.at_ms >= reconnectAtMs) {
-      forceSimulatedReconnect();
-      didReconnect = true;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
-    if (item.type === 'channel.chat_settings.update') {
-      channel.applyRecordedSettings(item.event as ChatSettingsNotification);
-    }
-    if (item.type === 'channel.chat.message') {
-      recordedMessageOffsets.push(item.at_ms);
-      const fraction = responseModel?.pass_through_by_step[activeStep(channel, profile)];
-      if (fraction === undefined || messagePassesModel(item.at_ms, index, fraction)) {
-        simulatedMessageOffsets.push(item.at_ms);
+  try {
+    await options.onDisplay?.(run.display);
+    let didReconnect = false;
+    for (let index = 0; index < replay.events.length; index += 1) {
+      const item = replay.events[index];
+      await clock.advanceTo(item.at_ms);
+      if (!didReconnect && reconnectAtMs !== undefined && item.at_ms >= reconnectAtMs) {
+        forceSimulatedReconnect();
+        didReconnect = true;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      if (item.type === 'channel.chat_settings.update') {
+        channel.applyRecordedSettings(item.event as ChatSettingsNotification);
+      }
+      if (item.type === 'channel.chat.message') {
+        recordedMessageOffsets.push(item.at_ms);
+        const fraction = responseModel?.pass_through_by_step[activeStep(channel, profile)];
+        if (fraction === undefined || messagePassesModel(item.at_ms, index, fraction)) {
+          simulatedMessageOffsets.push(item.at_ms);
+          emitSimulatedEvent(toUndertowEvent(item, index));
+        }
+      } else {
         emitSimulatedEvent(toUndertowEvent(item, index));
       }
-    } else {
-      emitSimulatedEvent(toUndertowEvent(item, index));
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    const endMs = replay.events.at(-1)?.at_ms ?? 0;
+    await clock.advanceTo(endMs + tailSeconds * 1000);
+  } finally {
+    await run.stop();
   }
-  const endMs = replay.events.at(-1)?.at_ms ?? 0;
-  await clock.advanceTo(endMs + tailSeconds * 1000);
-  await run.stop();
   const logPath = join(stateDirectory, 'storm.log.jsonl');
   const lines = (await readFile(logPath, 'utf8')).trim().split('\n');
   const decisions = lines.filter(Boolean).map((line) => {

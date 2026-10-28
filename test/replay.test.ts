@@ -100,6 +100,22 @@ test('replay loader rejects backwards offsets, unknown types, and missing header
   assert.throws(() => parseReplay(JSON.stringify(first)), /version 1 header/);
 });
 
+test('overlay replay speed waits between simulated clock ticks', async () => {
+  const replay = replayWithMessages(1, 2000);
+  const profile = await loadConfig('loadtest');
+  const directory = await temporaryDirectory();
+  const waits: number[] = [];
+  try {
+    await runReplay(replay, profile, directory, 2, undefined, null, {
+      speed: 2,
+      sleep: async (milliseconds) => { waits.push(milliseconds); },
+    });
+    assert.deepEqual(waits, [500, 500]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('shipped storm model lowers response, climbs, restores, and is deterministic', async () => {
   const replay = await loadReplay('replays/gift-wave.jsonl');
   const profile = await loadConfig('loadtest');
@@ -292,6 +308,15 @@ test('run recording writes redacted replay events accepted by the loader', async
 test('replay output labels modeled and recorded rates and needs no credentials', async () => {
   const directory = await temporaryDirectory();
   try {
+    const repeatedOverlay = spawnSync(process.execPath, [
+      'src/cli.ts', 'replay', 'replays/gift-wave.jsonl', '--runs', '3', '--overlay',
+    ], {
+      env: { PATH: process.env.PATH ?? '', UNDERTOW_STATE_DIR: directory },
+      encoding: 'utf8',
+    });
+    assert.equal(repeatedOverlay.status, 1);
+    assert.match(repeatedOverlay.stderr, /cannot be combined with --runs greater than 1/);
+
     const result = spawnSync(process.execPath, [
       'src/cli.ts', 'replay', 'replays/gift-wave.jsonl', '--profile', 'loadtest', '--runs', '1',
     ], {
