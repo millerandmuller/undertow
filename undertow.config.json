@@ -1,0 +1,36 @@
+{
+  "real": {
+    "setpoint_msgs_per_s": 6,
+    "window_s": 10,
+    "dwell_s": 20,
+    "release_hold_s": 30,
+    "release_ratio": 0.5,
+    "warning_boost": 1.5,
+    "warning_hold_s": 20,
+    "override_hold_s": 60,
+    "ladder": [
+      { "kind": "slow", "slow_mode_wait_time": 3 },
+      { "kind": "slow", "slow_mode_wait_time": 10 },
+      { "kind": "slow", "slow_mode_wait_time": 30 },
+      { "kind": "followers", "follower_mode_duration": 10 },
+      { "kind": "emote" }
+    ]
+  },
+  "loadtest": {
+    "setpoint_msgs_per_s": 2,
+    "window_s": 10,
+    "dwell_s": 8,
+    "release_hold_s": 30,
+    "release_ratio": 0.5,
+    "warning_boost": 1.5,
+    "warning_hold_s": 10,
+    "override_hold_s": 60,
+    "ladder": [
+      { "kind": "slow", "slow_mode_wait_time": 3 },
+      { "kind": "slow", "slow_mode_wait_time": 10 },
+      { "kind": "slow", "slow_mode_wait_time": 30 },
+      { "kind": "followers", "follower_mode_duration": 10 },
+      { "kind": "emote" }
+    ]
+  }
+}
