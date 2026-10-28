@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.ts",
-    "login": "node src/cli.ts login",
-    "probe": "node src/cli.ts probe",
-    "watch": "node src/cli.ts watch",
-    "restore": "node src/cli.ts restore",
+    "login": "node --env-file-if-exists=.env src/cli.ts login",
+    "probe": "node --env-file-if-exists=.env src/cli.ts probe",
+    "watch": "node --env-file-if-exists=.env src/cli.ts watch",
+    "restore": "node --env-file-if-exists=.env src/cli.ts restore",
     "check": "node scripts/check.mjs"
   }
 }
