@@ -288,6 +288,7 @@ export class EventSub {
   }
 
   private async reconnectFresh(): Promise<void> {
+    this.log({ type: 'reconnect', mode: 'fresh' });
     try {
       this.active = await this.openSocket('wss://eventsub.wss.twitch.tv/ws', 'subscribe');
     } catch (error) {
@@ -300,12 +301,14 @@ export class EventSub {
     envelope: EventSubEnvelope,
   ): Promise<void> {
     const url = envelope.payload.session?.reconnect_url;
+    this.log({ type: 'reconnect', mode: 'handover' });
     if (!url) throw new Error('Reconnect message did not include a URL');
     try {
       // Twitch carries subscriptions over; keep the old socket until welcome confirms handover.
       const replacement = await this.openSocket(url, 'handover');
       this.active = replacement;
       this.closeSocket(oldState);
+      this.log({ type: 'reconnect_complete', mode: 'handover' });
     } catch (error) {
       this.log({ type: 'handover_failed', message: (error as Error).message });
     }

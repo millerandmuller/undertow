@@ -23,7 +23,9 @@ They load `.env` automatically; clones without the file can still run commands s
 `node src/cli.ts run` starts the controller in dry mode. It listens to EventSub,
 calculates chat pace, and writes JSON lines to `.undertow/storm.log.jsonl` without
 changing settings or replying. Add `--live` to apply the ladder and send threaded
-notices; live mode always saves and restores the channel baseline on exit. You can
+notices; live mode always saves and restores the channel baseline on exit. Pass
+`--verbose` to print raw EventSub notifications; connection and error events always
+remain visible. You can
 also pass `--dry` explicitly. `UNDERTOW_STATE_DIR` selects another directory for
 tokens, baseline, and logs, which is useful for isolated runs.
 

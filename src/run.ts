@@ -62,6 +62,19 @@ export function createDisplayState(setpoint: number): DisplayState {
   return display;
 }
 
+export type RunClock = {
+  now(): number;
+  every(intervalMs: number, callback: () => Promise<void>): () => void;
+};
+
+const SYSTEM_CLOCK: RunClock = {
+  now: Date.now,
+  every(intervalMs, callback) {
+    const timer = setInterval(() => { void callback(); }, intervalMs);
+    return () => clearInterval(timer);
+  },
+};
+
 export type RunOptions = {
   helix: Helix;
   broadcasterId: string;
@@ -70,6 +83,8 @@ export type RunOptions = {
   dryRun: boolean;
   log?: (entry: unknown) => void;
   socketConstructor?: EventSubSocketConstructor;
+  verbose?: boolean;
+  clock?: RunClock;
 };
 
 export type RunHandle = {
@@ -155,6 +170,30 @@ function isGift(event: ChatNotification): boolean {
   return event.notice_type.includes('gift');
 }
 
+function isRawEvent(entry: unknown): boolean {
+  if (typeof entry !== 'object' || entry === null) return false;
+  const value = entry as Record<string, unknown>;
+  return typeof value.type === 'string' && value.type.startsWith('channel.') &&
+    typeof value.message_id === 'string';
+}
+
+function rateText(value: number): string {
+  return String(Number(value.toFixed(1)));
+}
+
+function statusLine(
+  display: DisplayState,
+  profile: ProfileConfig,
+  dryRun: boolean,
+  warning: 'gift' | 'raid' | null,
+): string {
+  const marker = warning ? `warning: ${warning}, ` : '';
+  const overlay = `pace ${rateText(display.pace)}/s, ` +
+    `setpoint ${rateText(display.setpoint)}/s, ` +
+    `step ${display.step} of ${profile.ladder.length}`;
+  return `${marker}${overlay} (${dryRun ? 'dry' : 'live'})`;
+}
+
 function activeSetpoint(
   nowMs: number,
   warningAt: number | null,
@@ -188,17 +227,23 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
   let paceState: PaceState = createPaceState(options.profile.window_s);
   let controller: ControllerState = initialControllerState();
   let warningAt: number | null = null;
+  let warningKind: 'gift' | 'raid' | null = null;
   let overrideUntilMs = 0;
   let lastMessageId: string | null = null;
   let stopped = false;
   let paused = false;
   let retryAfterMs = 0;
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let cancelTicks: (() => void) | undefined;
   let tickInFlight: Promise<void> | null = null;
   let resolveDone: (() => void) = () => undefined;
   const done = new Promise<void>((resolve) => { resolveDone = resolve; });
   const display = createDisplayState(options.profile.setpoint_msgs_per_s);
-  const sender = new ChatSender(options.helix, options.broadcasterId, { log: logger });
+  const clock = options.clock ?? SYSTEM_CLOCK;
+  let nextStatusAtMs = clock.now() + options.profile.window_s * 1000;
+  const sender = new ChatSender(options.helix, options.broadcasterId, {
+    now: () => clock.now(),
+    log: logger,
+  });
 
   const restore = async (): Promise<void> => {
     if (options.dryRun) return;
@@ -211,14 +256,16 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     options.broadcasterId,
     (event) => { void processEvent(event); },
     options.socketConstructor ?? WebSocket,
-    logger,
+    (entry) => {
+      if (!isRawEvent(entry) || options.verbose) logger(entry);
+    },
   );
 
   let stopOperation: Promise<void> | null = null;
   const stop = (): Promise<void> => {
     if (stopOperation) return stopOperation;
     stopped = true;
-    if (timer) clearInterval(timer);
+    cancelTicks?.();
     eventSub.close();
     stopOperation = (async () => {
       try {
@@ -241,7 +288,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
   async function processManualSettings(event: ChatSettingsNotification): Promise<void> {
     const patch = eventPatch(event);
     if (matchesExpected(patch, expected)) return;
-    const nowMs = Date.now();
+    const nowMs = clock.now();
     overrideUntilMs = nowMs + options.profile.override_hold_s * 1000;
     controller = { ...initialControllerState(), lastMoveMs: nowMs };
     logger({ type: 'manual_settings_change', override_until_ms: overrideUntilMs });
@@ -250,7 +297,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
 
   async function processEvent(event: UndertowEvent): Promise<void> {
     try {
-      const nowMs = Date.now();
+      const nowMs = clock.now();
       if (event.type === 'channel.chat.message') {
         const message = event.event as ChatMessageNotification;
         lastMessageId = message.message_id;
@@ -259,6 +306,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
         const notice = event.event as ChatNotification;
         if (isGift(notice)) {
           warningAt = nowMs;
+          warningKind = 'gift';
           const notice = warningNotice(
             'gift',
             rate(paceState, nowMs),
@@ -269,6 +317,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
         }
       } else if (event.type === 'channel.raid') {
         warningAt = nowMs;
+        warningKind = 'raid';
         const notice = warningNotice(
           'raid',
           rate(paceState, nowMs),
@@ -315,7 +364,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
 
   async function tick(): Promise<void> {
     if (stopped) return;
-    const nowMs = Date.now();
+    const nowMs = clock.now();
     const pace = rate(paceState, nowMs);
     const decision = paused
       ? { state: controller, action: { type: 'yield' as const } }
@@ -382,17 +431,32 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       reply_id: lastMessageId,
       ratelimit_remaining: options.helix.remaining,
     });
+    if (nowMs >= nextStatusAtMs) {
+      const activeWarning = warningAt !== null &&
+        nowMs - warningAt <= options.profile.warning_hold_s * 1000;
+      logger(statusLine(
+        display,
+        options.profile,
+        options.dryRun,
+        activeWarning ? warningKind : null,
+      ));
+      nextStatusAtMs = nowMs + options.profile.window_s * 1000;
+    }
   }
 
   await eventSub.connect();
-  timer = setInterval(() => {
+  cancelTicks = clock.every(1000, async () => {
     if (tickInFlight || stopped) return;
     tickInFlight = tick();
-    void tickInFlight.catch((error: unknown) => {
+    try {
+      await tickInFlight;
+    } catch (error) {
       logger({ type: 'fatal_run_error', message: errorMessage(error) });
-      void stop();
-    }).finally(() => { tickInFlight = null; });
-  }, 1000);
+      await stop();
+    } finally {
+      tickInFlight = null;
+    }
+  });
   return {
     display,
     done,
