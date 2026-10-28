@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "label": "synthetic assumption, not measured",
+  "note": "Placeholder pass-through fractions for controller testing only.",
+  "pass_through_by_step": [1.0, 0.85, 0.6, 0.35, 0.25, 0.15]
+}

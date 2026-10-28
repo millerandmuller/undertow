@@ -12,6 +12,11 @@ import {
   SimulatedSocketConstructor,
 } from './socket.ts';
 import { toUndertowEvent, type ReplayFile } from './replay.ts';
+import {
+  labelRateText,
+  messagePassesModel,
+  type ResponseModel,
+} from './response-model.ts';
 
 type ReplayDecision = RunLog & { offset_ms: number };
 export type ReplayResult = {
@@ -21,7 +26,20 @@ export type ReplayResult = {
   finalSettings: ChatSettings;
   baseline: ChatSettings;
   profile: ProfileConfig;
+  recordedMessageOffsets: number[];
+  simulatedMessageOffsets: number[];
+  modeled: boolean;
 };
+
+function activeStep(channel: SimulatedChannel, profile: ProfileConfig): number {
+  for (let index = profile.ladder.length - 1; index >= 0; index -= 1) {
+    const patch = profile.ladder[index].patch;
+    const matches = Object.entries(patch).every(([key, value]) =>
+      channel.settings[key as keyof ChatSettings] === value);
+    if (matches) return index + 1;
+  }
+  return 0;
+}
 
 export async function runReplay(
   replay: ReplayFile,
@@ -29,6 +47,7 @@ export async function runReplay(
   stateDirectory: string,
   tailSeconds = 90,
   reconnectAtMs?: number,
+  responseModel: ResponseModel | null = null,
 ): Promise<ReplayResult> {
   await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
   await rm(join(stateDirectory, 'storm.log.jsonl'), { force: true });
@@ -48,6 +67,8 @@ export async function runReplay(
     log: () => undefined,
   });
   let didReconnect = false;
+  const recordedMessageOffsets: number[] = [];
+  const simulatedMessageOffsets: number[] = [];
   for (let index = 0; index < replay.events.length; index += 1) {
     const item = replay.events[index];
     await clock.advanceTo(item.at_ms);
@@ -59,7 +80,16 @@ export async function runReplay(
     if (item.type === 'channel.chat_settings.update') {
       channel.applyRecordedSettings(item.event as ChatSettingsNotification);
     }
-    emitSimulatedEvent(toUndertowEvent(item, index));
+    if (item.type === 'channel.chat.message') {
+      recordedMessageOffsets.push(item.at_ms);
+      const fraction = responseModel?.pass_through_by_step[activeStep(channel, profile)];
+      if (fraction === undefined || messagePassesModel(item.at_ms, index, fraction)) {
+        simulatedMessageOffsets.push(item.at_ms);
+        emitSimulatedEvent(toUndertowEvent(item, index));
+      }
+    } else {
+      emitSimulatedEvent(toUndertowEvent(item, index));
+    }
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
   const endMs = replay.events.at(-1)?.at_ms ?? 0;
@@ -78,18 +108,32 @@ export async function runReplay(
     finalSettings: channel.settings,
     baseline: replay.header.baseline,
     profile,
+    recordedMessageOffsets,
+    simulatedMessageOffsets,
+    modeled: responseModel !== null,
   };
 }
 
 export async function writeLastReplay(
   stateDirectory: string,
   decisions: ReplayDecision[],
+  paceSource: 'modeled' | 'recorded',
 ): Promise<void> {
   const path = join(stateDirectory, 'replay.last.jsonl');
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const rows = decisions.map((decision) => {
     const { offset_ms: _offset, ...log } = decision;
-    return JSON.stringify(log);
+    return JSON.stringify({
+      t: log.t,
+      pace: log.pace,
+      pace_source: paceSource,
+      setpoint: log.setpoint,
+      step: log.step,
+      action: log.action,
+      reason: labelRateText(log.reason, paceSource),
+      reply_id: log.reply_id,
+      ratelimit_remaining: log.ratelimit_remaining,
+    });
   });
   await writeFile(path, `${rows.join('\n')}\n`, { mode: 0o600 });
 }

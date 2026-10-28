@@ -110,6 +110,7 @@ test('run prints one status line per window in dry and live modes', async () => 
       }
       await run.clock.seconds(1);
       const statuses = logs.filter((entry): entry is string => typeof entry === 'string');
+      if (dryRun) assert.doesNotMatch(JSON.stringify(logs), /modeled/);
       assert.deepEqual(statuses, [
         `pace 0.4/s, setpoint 6/s, step 0 of 5 (${dryRun ? 'dry' : 'live'})`,
         `pace 0.4/s, setpoint 6/s, step 0 of 5 (${dryRun ? 'dry' : 'live'})`,

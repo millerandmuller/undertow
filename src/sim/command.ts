@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { loadConfig } from '../config.ts';
 import { runReplay, writeLastReplay, type ReplayResult } from './driver.ts';
 import { loadReplay } from './replay.ts';
+import { labelRateText, loadResponseModel } from './response-model.ts';
 
 function option(args: string[], name: string, fallback: string): string {
   const index = args.indexOf(name);
@@ -45,32 +46,68 @@ function settingsMatchBaseline(result: ReplayResult): boolean {
       current.follower_mode_duration === baseline.follower_mode_duration);
 }
 
-function report(result: ReplayResult, events: number[]): void {
+function report(result: ReplayResult): void {
+  const rateLabel = result.modeled ? 'modeled' : 'recorded';
   const moves = result.decisions.filter((item) => item.action !== 'none');
   for (const item of moves) {
     console.log(
-      `${(item.offset_ms / 1000).toFixed(0)}s pace ${item.pace.toFixed(1)}/s, ` +
-      `setpoint ${item.setpoint.toFixed(1)}/s, step ${item.step}, ` +
-      `${item.action}: ${item.reason}`,
+      `${(item.offset_ms / 1000).toFixed(0)}s pace ${item.pace.toFixed(1)}/s ` +
+      `(${rateLabel}), setpoint ${item.setpoint.toFixed(1)}/s (configured), ` +
+      `step ${item.step}, ${item.action}: ${labelRateText(item.reason, rateLabel)}`,
     );
   }
   const stepUps = result.decisions.filter((item) => item.action === 'step_up');
+  const firstUp = stepUps[0];
   const lastUp = stepUps.at(-1);
   const windowMs = result.profile.window_s * 1000;
-  const before = lastUp
-    ? countRate(events, lastUp.offset_ms - windowMs, lastUp.offset_ms)
+  const recordedBefore = firstUp
+    ? countRate(result.recordedMessageOffsets, firstUp.offset_ms - windowMs, firstUp.offset_ms)
     : 0;
-  const after = lastUp
-    ? countRate(events, lastUp.offset_ms, lastUp.offset_ms + windowMs)
+  const recordedAfter = lastUp
+    ? countRate(result.recordedMessageOffsets, lastUp.offset_ms, lastUp.offset_ms + windowMs)
     : 0;
-  const peak = peakRate(events, windowMs);
+  const modeledBefore = firstUp
+    ? countRate(result.simulatedMessageOffsets, firstUp.offset_ms - windowMs, firstUp.offset_ms)
+    : 0;
+  const modeledAfter = lastUp
+    ? countRate(result.simulatedMessageOffsets, lastUp.offset_ms, lastUp.offset_ms + windowMs)
+    : 0;
+  const recordedPeak = peakRate(result.recordedMessageOffsets, windowMs);
+  const modeledPeak = peakRate(result.simulatedMessageOffsets, windowMs);
   const restore = result.decisions.find((item) => item.action === 'restore');
   const restoredAt = restore
     ? ((restore.offset_ms - (lastUp?.offset_ms ?? 0)) / 1000).toFixed(0) + ' s'
     : 'not restored';
   const equal = settingsMatchBaseline(result);
-  console.log(`summary peak ${peak.toFixed(1)} msgs/s`);
-  console.log(`pace around final step-up ${before.toFixed(1)} before, ${after.toFixed(1)} after`);
+  if (result.modeled) {
+    console.log(
+      `summary modeled peak pace ${modeledPeak.toFixed(1)} msgs/s (modeled); ` +
+      `recorded peak pace ${recordedPeak.toFixed(1)} msgs/s (recorded)`,
+    );
+    console.log(
+      `modeled pace before the first step-up ${modeledBefore.toFixed(1)} msgs/s ` +
+      `(modeled)`,
+    );
+    console.log(
+      `modeled pace after the last step-up ${modeledAfter.toFixed(1)} msgs/s (modeled)`,
+    );
+    console.log(
+      `recorded pace before the first step-up ${recordedBefore.toFixed(1)} msgs/s ` +
+      `(recorded)`,
+    );
+    console.log(
+      `recorded pace after the last step-up ${recordedAfter.toFixed(1)} msgs/s (recorded)`,
+    );
+  } else {
+    console.log(`summary recorded peak pace ${recordedPeak.toFixed(1)} msgs/s (recorded)`);
+    console.log(
+      `recorded pace before the first step-up ${recordedBefore.toFixed(1)} msgs/s ` +
+      `(recorded)`,
+    );
+    console.log(
+      `recorded pace after the last step-up ${recordedAfter.toFixed(1)} msgs/s (recorded)`,
+    );
+  }
   console.log(`steps taken ${stepUps.length}; time to restore after final step-up ${restoredAt}`);
   console.log(`final settings equal baseline: ${equal ? 'yes' : 'no'}`);
 }
@@ -87,10 +124,11 @@ async function runFreshSimulation(
   replay: Awaited<ReturnType<typeof loadReplay>>,
   profile: Awaited<ReturnType<typeof loadConfig>>,
   tailSeconds: number,
+  model: Awaited<ReturnType<typeof loadResponseModel>> | null,
 ): Promise<ReplayResult> {
   const directory = await mkdtemp(join(tmpdir(), 'undertow-replay-'));
   try {
-    return await runReplay(replay, profile, directory, tailSeconds);
+    return await runReplay(replay, profile, directory, tailSeconds, undefined, model);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -113,14 +151,25 @@ export async function replayCommand(args: string[]): Promise<void> {
   const replay = await loadReplay(file);
   const profile = await loadConfig(profileName);
   const stateDirectory = process.env.UNDERTOW_STATE_DIR ?? '.undertow';
-  const events = replay.events
-    .filter((item) => item.type === 'channel.chat.message')
-    .map((item) => item.at_ms);
+  const modelOption = option(args, '--model', replay.header.synthetic ? 'on' : 'off');
+  if (modelOption !== 'on' && modelOption !== 'off') {
+    throw new Error('--model must be on or off');
+  }
+  const modelEnabled = replay.header.synthetic && modelOption === 'on';
+  const model = modelEnabled ? await loadResponseModel() : null;
   console.log(`SIMULATION (replay of ${file}, no Twitch connection)`);
+  if (modelEnabled) {
+    console.log('RESPONSE MODEL: synthetic assumption, not measured ' +
+      '(replays/response-model.json)');
+  } else if (!replay.header.synthetic) {
+    console.log('RECORDED STREAM: open loop; messages did not react to the controller.');
+  } else {
+    console.log('RECORDED STREAM: model off; replay is open loop.');
+  }
   let first: ReplayResult | null = null;
   let last: ReplayResult | null = null;
   for (let index = 0; index < runCount; index += 1) {
-    const result = await runFreshSimulation(replay, profile, tailSeconds);
+    const result = await runFreshSimulation(replay, profile, tailSeconds, model);
     if (first && !sameDecisions(first, result)) {
       console.error(firstDifference(first, result));
       process.exitCode = 1;
@@ -130,7 +179,7 @@ export async function replayCommand(args: string[]): Promise<void> {
     last = result;
   }
   if (!last) throw new Error('Replay did not run');
-  report(last, events);
-  await writeLastReplay(stateDirectory, last.decisions);
+  report(last);
+  await writeLastReplay(stateDirectory, last.decisions, last.modeled ? 'modeled' : 'recorded');
   console.log(`deterministic: ${runCount} of ${runCount} runs identical`);
 }

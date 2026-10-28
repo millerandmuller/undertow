@@ -5,7 +5,6 @@ import { loadConfig, selectedProfile } from './config.ts';
 import { startRun } from './run.ts';
 import { Helix } from './util/helix.ts';
 import { atomicJson, readJson } from './util/files.ts';
-import { replayCommand } from './sim/command.ts';
 
 function stateDirectory(): string {
   return process.env.UNDERTOW_STATE_DIR ?? '.undertow';
@@ -160,7 +159,10 @@ try {
   else if (command === 'restore') await restore();
   else if (command === 'watch') await watch();
   else if (command === 'run') await run();
-  else if (command === 'replay') await replayCommand(process.argv.slice(3));
+  else if (command === 'replay') {
+    const { replayCommand } = await import('./sim/command.ts');
+    await replayCommand(process.argv.slice(3));
+  }
   else {
     throw new Error('Usage: node src/cli.ts <login|probe|watch|restore|run|replay>');
   }
