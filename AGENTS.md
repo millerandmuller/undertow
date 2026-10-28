@@ -4,3 +4,4 @@
 - Restore channel chat settings on exit after any change.
 - Keep any future pace controller free of I/O.
 - Run `npm test` before committing.
+- The controller stays pure: no I/O, timers, or clock reads.

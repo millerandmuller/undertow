@@ -16,3 +16,23 @@ They load `.env` automatically; clones without the file can still run commands s
 - `npm run watch -- --seconds 30` — listen to EventSub for 30 seconds by default and print event types.
 - `npm run restore` — restore and verify saved chat settings.
 - `npm test` — run local tests.
+
+
+## Run the pace controller
+
+`node src/cli.ts run` starts the controller in dry mode. It listens to EventSub,
+calculates chat pace, and writes JSON lines to `.undertow/storm.log.jsonl` without
+changing settings or replying. Add `--live` to apply the ladder and send threaded
+notices; live mode always saves and restores the channel baseline on exit. You can
+also pass `--dry` explicitly. `UNDERTOW_STATE_DIR` selects another directory for
+tokens, baseline, and logs, which is useful for isolated runs.
+
+Choose `real` (default) or `loadtest` with `--profile real` / `--profile loadtest`,
+or set `UNDERTOW_PROFILE`. `undertow.config.json` defines both profiles. The
+ladder steps are slow mode at 3, 10, and 30 seconds, followers-only for 10 minutes,
+then emote-only. The controller moves one step at a time after sustained high pace;
+it releases one step at a time after pace stays below the release threshold.
+
+A gift or raid temporarily lowers the effective setpoint. If a channel settings
+update does not match Undertow's last patch, Undertow restores its baseline and
+yields to the streamer for the configured manual override hold.
