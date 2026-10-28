@@ -6,3 +6,4 @@
 - Run `npm test` before committing.
 - The controller stays pure: no I/O, timers, or clock reads.
 - Simulated pieces live in `src/sim` and are labeled.
+- Modeled numbers live only in `src/sim` and are always labeled modeled.

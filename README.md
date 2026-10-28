@@ -35,6 +35,14 @@ ladder steps are slow mode at 3, 10, and 30 seconds, followers-only for 10 minut
 then emote-only. The controller moves one step at a time after sustained high pace;
 it releases one step at a time after pace stays below the release threshold.
 
+| Profile | Setpoint | Window | Dwell | Release hold |
+| --- | ---: | ---: | ---: | ---: |
+| real | 6 msgs/s | 10 s | 20 s | 30 s |
+| loadtest | 2 msgs/s | 10 s | 15 s | 30 s |
+
+The loadtest dwell is deliberately 15 s: on camera a step every 8 s looks like
+panic.
+
 A gift or raid temporarily lowers the effective setpoint. If a channel settings
 update does not match Undertow's last patch, Undertow restores its baseline and
 yields to the streamer for the configured manual override hold.
@@ -47,6 +55,12 @@ and simulated clock. Replay needs no `.env`, token, or network connection. It pr
 an honesty banner, decisions, summary metrics, and whether repeated runs matched.
 `--runs N` repeats from a fresh simulated channel; `--tail N` changes the default
 90 second release tail. The shipped storm is synthetic; see `replays/README.md`.
+Synthetic files use `--model on` by default; pass `--model off` for an open-loop
+replay. Recorded real files default to `--model off` and remain open loop. Modeled
+paces are labeled `modeled` and the banner names the synthetic assumption file;
+unmodified input rates are labeled `recorded`. The model exists to test controller
+behavior, not to estimate real impact. The only impact number shown in the demo
+comes from the live load test.
 The last run's decisions are written to `.undertow/replay.last.jsonl`, or to the
 folder set by `UNDERTOW_STATE_DIR`.
 

@@ -19,7 +19,7 @@
   "loadtest": {
     "setpoint_msgs_per_s": 2,
     "window_s": 10,
-    "dwell_s": 8,
+    "dwell_s": 15,
     "release_hold_s": 30,
     "release_ratio": 0.5,
     "warning_boost": 1.5,
