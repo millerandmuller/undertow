@@ -5,3 +5,4 @@
 - Keep any future pace controller free of I/O.
 - Run `npm test` before committing.
 - The controller stays pure: no I/O, timers, or clock reads.
+- Simulated pieces live in `src/sim` and are labeled.

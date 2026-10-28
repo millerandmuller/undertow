@@ -38,3 +38,19 @@ it releases one step at a time after pace stays below the release threshold.
 A gift or raid temporarily lowers the effective setpoint. If a channel settings
 update does not match Undertow's last patch, Undertow restores its baseline and
 yields to the streamer for the configured manual override hold.
+
+## Replay a storm
+
+`npm run replay -- replays/gift-wave.jsonl --profile loadtest --runs 3` runs the
+recording through Undertow's controller and run loop using an in-memory channel
+and simulated clock. Replay needs no `.env`, token, or network connection. It prints
+an honesty banner, decisions, summary metrics, and whether repeated runs matched.
+`--runs N` repeats from a fresh simulated channel; `--tail N` changes the default
+90 second release tail. The shipped storm is synthetic; see `replays/README.md`.
+The last run's decisions are written to `.undertow/replay.last.jsonl`, or to the
+folder set by `UNDERTOW_STATE_DIR`.
+
+Add `--record path.jsonl` to `run` to record the four supported EventSub event
+types for later replay. Recorded files have `synthetic:false`. Chat display text
+is replaced with its character count; event ids, notice types, and required
+payload fields remain available to reproduce controller behavior.
