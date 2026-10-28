@@ -52,6 +52,33 @@ test('device login polls pending and slow_down before success', async () => {
   assert.equal(savedLogin, 'streamer');
 });
 
+test('device grant sends scopes in device and token requests', async () => {
+  const requests: { url: string; scopes: string | null }[] = [];
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = String(input);
+    const body = init?.body as URLSearchParams | undefined;
+    requests.push({ url, scopes: body?.get('scopes') ?? null });
+    if (url.endsWith('/device')) {
+      return jsonResponse({
+        device_code: 'device',
+        user_code: 'code',
+        verification_uri: 'https://example.test',
+        expires_in: 30,
+        interval: 1,
+      });
+    }
+    if (url.endsWith('/token')) return jsonResponse(validTokens);
+    return validateResponse();
+  };
+  await deviceLogin('client', 'streamer', async () => undefined, {
+    fetcher,
+    sleep: async () => undefined,
+  });
+  const expected = requiredScopes.join(' ');
+  assert.equal(requests[0].scopes, expected);
+  assert.equal(requests[1].scopes, expected);
+});
+
 test('device login reports denial and expiry', async () => {
   for (const [message, expected] of [
     ['access_denied', /denied/],
@@ -86,6 +113,10 @@ test('validation rejects a different login and missing scopes', async () => {
     ...identity,
     scopes: [],
   })), /Missing required/);
+  await assert.rejects(validateToken('access', 'client', 'streamer', async () => jsonResponse({
+    ...identity,
+    scopes: null,
+  })), /Missing required Twitch scopes/);
 });
 
 test('refresh token rotation persists before returning the access token', async () => {
@@ -100,6 +131,24 @@ test('refresh token rotation persists before returning the access token', async 
   }));
   assert.equal(persisted, true);
   assert.equal(rotated.access_token, 'new-access');
+});
+
+test('refresh request includes client secret when provided', async () => {
+  let sentBody: URLSearchParams | undefined;
+  await refreshTokens(validTokens, 'client', async () => undefined, async (_input, init) => {
+    sentBody = init?.body as URLSearchParams;
+    return jsonResponse(validTokens);
+  }, 'confidential-secret');
+  assert.equal(sentBody?.get('client_secret'), 'confidential-secret');
+});
+
+test('refresh request omits client secret when not provided', async () => {
+  let sentBody: URLSearchParams | undefined;
+  await refreshTokens(validTokens, 'client', async () => undefined, async (_input, init) => {
+    sentBody = init?.body as URLSearchParams;
+    return jsonResponse(validTokens);
+  });
+  assert.equal(sentBody?.has('client_secret'), false);
 });
 
 test('chat settings bounds accept edges and reject outside values', () => {

@@ -17,9 +17,13 @@ type DeviceResponse = {
   interval: number;
 };
 
-type ValidateResponse = {
+type ValidatePayload = {
   user_id: string;
   login: string;
+  scopes: string[] | null;
+};
+
+type ValidateResponse = Omit<ValidatePayload, 'scopes'> & {
   scopes: string[];
 };
 
@@ -60,7 +64,8 @@ export async function validateToken(
     throw new Error(`Token validation failed (${response.status})`);
   }
 
-  const identity = await response.json() as ValidateResponse;
+  const received = await response.json() as ValidatePayload;
+  const identity: ValidateResponse = { ...received, scopes: received.scopes ?? [] };
   if (identity.login.toLowerCase() !== expectedLogin.toLowerCase()) {
     throw new Error(
       `Authenticated login ${identity.login} does not match TWITCH_CHANNEL_LOGIN ${expectedLogin}`,
@@ -79,7 +84,7 @@ async function requestDeviceCode(
 ): Promise<DeviceResponse> {
   const response = await fetcher(DEVICE_URL, form({
     client_id: clientId,
-    scope: REQUIRED_SCOPES.join(' '),
+    scopes: REQUIRED_SCOPES.join(' '),
   }));
   if (!response.ok) {
     throw new Error(`Device authorization failed (${response.status})`);
@@ -96,6 +101,7 @@ async function pollToken(
     client_id: clientId,
     device_code: deviceCode,
     grant_type: DEVICE_GRANT,
+    scopes: REQUIRED_SCOPES.join(' '),
   }));
 }
 
@@ -141,12 +147,15 @@ export async function refreshTokens(
   clientId: string,
   persist: (tokens: Tokens) => Promise<void>,
   fetcher: typeof fetch = fetch,
+  clientSecret?: string,
 ): Promise<Tokens> {
-  const response = await fetcher(TOKEN_URL, form({
+  const body: Record<string, string> = {
     client_id: clientId,
     grant_type: 'refresh_token',
     refresh_token: tokens.refresh_token,
-  }));
+  };
+  if (clientSecret) body.client_secret = clientSecret;
+  const response = await fetcher(TOKEN_URL, form(body));
   if (!response.ok) throw new Error(`Token refresh failed (${response.status})`);
   const rotated = { ...tokens, ...await response.json() as TokenResponse };
   // Twitch invalidates the previous refresh token as soon as it rotates it.
