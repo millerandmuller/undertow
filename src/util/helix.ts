@@ -9,6 +9,7 @@ export type HelixError = {
 type HelixOptions = {
   fetcher?: typeof fetch;
   sleep?: (milliseconds: number) => Promise<void>;
+  clientSecret?: string;
 };
 
 export class Helix {
@@ -19,6 +20,7 @@ export class Helix {
   persist: (tokens: Tokens) => Promise<void>;
   fetcher: typeof fetch;
   sleep: (milliseconds: number) => Promise<void>;
+  clientSecret?: string;
 
   constructor(
     clientId: string,
@@ -31,6 +33,7 @@ export class Helix {
     this.persist = persist;
     this.fetcher = options.fetcher ?? fetch;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.clientSecret = options.clientSecret;
   }
 
   private async send(path: string, init: RequestInit): Promise<Response> {
@@ -60,6 +63,7 @@ export class Helix {
         this.clientId,
         this.persist,
         this.fetcher,
+        this.clientSecret,
       );
       response = await this.send(path, init);
       this.keepRateLimit(response);

@@ -25,6 +25,7 @@ async function context() {
     clientId,
     tokens,
     (next) => atomicJson(tokenFile, next),
+    { clientSecret: process.env.TWITCH_CLIENT_SECRET },
   );
   return {
     identity,
