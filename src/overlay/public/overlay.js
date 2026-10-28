@@ -1,4 +1,11 @@
-import { paceAngle, stepDots } from './gauge.js';
+import {
+  GAUGE_HUB,
+  arcPath,
+  labelAnchor,
+  paceAngle,
+  stepDots,
+  tickEndpoints,
+} from './gauge.js';
 
 const card = document.querySelector('#card');
 const pace = document.querySelector('#pace');
@@ -10,6 +17,8 @@ const warning = document.querySelector('#warning');
 const over = document.querySelector('#over');
 const needle = document.querySelector('#needle');
 const setpointMark = document.querySelector('#setpoint');
+const setpointLabel = document.querySelector('#setpoint-label');
+const arc = document.querySelector('#arc');
 const steps = document.querySelector('#steps');
 const rate = document.querySelector('#rate');
 const rateFill = document.querySelector('#rate-fill');
@@ -24,12 +33,16 @@ let latest = null;
 let lastSignalAt = Date.now();
 let connectionLost = false;
 
-function setPolarLine(element, angle, innerRadius, outerRadius) {
-  const radians = angle * Math.PI / 180;
-  element.setAttribute('x1', String(200 + Math.cos(radians) * innerRadius));
-  element.setAttribute('y1', String(150 - Math.sin(radians) * innerRadius));
-  element.setAttribute('x2', String(200 + Math.cos(radians) * outerRadius));
-  element.setAttribute('y2', String(150 - Math.sin(radians) * outerRadius));
+function setTick(value, setpoint) {
+  const points = tickEndpoints(value, setpoint);
+  setpointMark.setAttribute('x1', String(points.inner.x));
+  setpointMark.setAttribute('y1', String(points.inner.y));
+  setpointMark.setAttribute('x2', String(points.outer.x));
+  setpointMark.setAttribute('y2', String(points.outer.y));
+  const anchor = labelAnchor(value, setpoint);
+  setpointLabel.setAttribute('x', String(anchor.x));
+  setpointLabel.setAttribute('y', String(anchor.y));
+  setpointLabel.setAttribute('text-anchor', anchor.x < GAUGE_HUB.x ? 'end' : 'start');
 }
 
 function renderSteps(step, count) {
@@ -45,24 +58,27 @@ function render(state) {
   const paceValue = Number.isFinite(state.pace) ? Math.max(0, state.pace) : 0;
   const setpointValue = Number.isFinite(state.setpoint) ? Math.max(0, state.setpoint) : 0;
   const angle = paceAngle(paceValue, setpointValue);
-  const setpointAngle = paceAngle(setpointValue, setpointValue);
+  arc.setAttribute('d', arcPath());
   pace.textContent = paceValue.toFixed(1);
   metrics.textContent = `pace ${paceValue.toFixed(1)}/s` +
     `${state.paceSource === 'modeled' ? ' modeled' : ''}, ` +
     `setpoint ${setpointValue.toFixed(1)}/s, ` +
     `step ${state.step} of ${state.stepCount} ${state.stepLabel}`;
   reason.textContent = state.lastReason || 'waiting for chat';
-  mode.textContent = state.mode === 'simulation'
-    ? 'simulation'
-    : state.mode === 'live' ? 'live' : 'dry run';
   badge.textContent = state.badge ?? '';
   badge.classList.toggle('hidden', !state.badge);
+  mode.textContent = state.mode === 'live'
+    ? 'live'
+    : state.mode === 'simulation' ? 'simulation' : 'dry run';
+  const duplicateSimulationMode = state.mode === 'simulation' &&
+    state.badge?.toUpperCase() === 'SIMULATION';
+  mode.classList.toggle('hidden', duplicateSimulationMode);
   warning.textContent = state.warning === 'gift' ? 'gift wave' : 'raid';
   warning.classList.toggle('hidden', !state.warning);
   over.classList.toggle('hidden', setpointValue <= 0 ||
     paceValue <= setpointValue * 2.5);
   needle.style.transform = `rotate(${90 - angle}deg)`;
-  setPolarLine(setpointMark, setpointAngle, 128, 145);
+  setTick(setpointValue, setpointValue);
   card.classList.toggle('simulation', state.mode === 'simulation');
   renderSteps(state.step, state.stepCount);
   if (state.ratelimitRemaining !== null && state.ratelimitLimit > 0) {
