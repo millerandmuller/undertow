@@ -40,18 +40,40 @@ export type DisplayState = {
   pace: number;
   setpoint: number;
   step: number;
+  mode: 'dry' | 'live' | 'simulation';
+  stepLabel: string;
+  stepCount: number;
+  warning: 'gift' | 'raid' | null;
+  ratelimitRemaining: number | null;
+  ratelimitLimit: number | null;
+  paceSource: 'measured' | 'modeled';
+  badge: string | null;
   lastReason: string;
   subscribe(listener: DisplayListener): () => void;
-  publish(next: Pick<DisplayState, 'pace' | 'setpoint' | 'step' | 'lastReason'>): void;
+  publish(next: Pick<DisplayState, 'pace' | 'setpoint' | 'step' | 'lastReason'> &
+    Partial<Pick<DisplayState,
+      'mode' | 'stepLabel' | 'stepCount' | 'warning' | 'ratelimitRemaining' |
+      'ratelimitLimit' | 'paceSource' | 'badge'>>): void;
 };
 
-export function createDisplayState(setpoint: number): DisplayState {
+export function createDisplayState(
+  setpoint: number,
+  mode: DisplayState['mode'] = 'dry',
+): DisplayState {
   const listeners = new Set<DisplayListener>();
   const display: DisplayState = {
     pace: 0,
     setpoint,
     step: 0,
-    lastReason: 'starting',
+    mode,
+    stepLabel: 'normal',
+    stepCount: 5,
+    warning: null,
+    ratelimitRemaining: null,
+    ratelimitLimit: null,
+    paceSource: 'measured',
+    badge: null,
+    lastReason: 'waiting for chat',
     subscribe(listener) {
       listeners.add(listener);
       listener(display);
@@ -230,6 +252,25 @@ function rateText(value: number): string {
   return String(Number(value.toFixed(1)));
 }
 
+function stepLabel(step: number, profile: ProfileConfig): string {
+  if (step === 0) return 'normal';
+  const current = profile.ladder[step - 1];
+  if (!current) return 'normal';
+  if (current.kind === 'slow') {
+    return `slow ${current.patch.slow_mode_wait_time} s`;
+  }
+  if (current.kind === 'followers') {
+    return `followers ${current.patch.follower_mode_duration} min`;
+  }
+  return 'emote only';
+}
+
+function rateLimitValue(value: string | null): number | null {
+  if (value === null) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function statusLine(
   display: DisplayState,
   profile: ProfileConfig,
@@ -301,7 +342,10 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
   let tickInFlight: Promise<void> | null = null;
   let resolveDone: (() => void) = () => undefined;
   const done = new Promise<void>((resolve) => { resolveDone = resolve; });
-  const display = createDisplayState(options.profile.setpoint_msgs_per_s);
+  const display = createDisplayState(
+    options.profile.setpoint_msgs_per_s,
+    options.dryRun ? 'dry' : 'live',
+  );
   let nextStatusAtMs = clock.now() + options.profile.window_s * 1000;
   const sender = new ChatSender(options.helix, options.broadcasterId, {
     now: () => clock.now(),
@@ -459,6 +503,9 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       }, options.profile);
     const notice = actionNotice(decision.action, options.profile, pace);
     let reason = paused ? 'login needed' : reasonFor(decision.action, notice);
+    if (!paused && lastMessageId === null && decision.action.type === 'none') {
+      reason = 'waiting for chat';
+    }
     if (!paused && nowMs < retryAfterMs) reason = 'waiting before retrying failed setting change';
     if (decision.action.type === 'none' || decision.action.type === 'yield') {
       controller = decision.state;
@@ -496,11 +543,21 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       }
     }
     const setpoint = activeSetpoint(nowMs, warningAt, options.profile);
+    const warningActive = warningAt !== null &&
+      nowMs - warningAt <= options.profile.warning_hold_s * 1000;
     display.publish({
       pace,
       setpoint,
       step: controller.step,
       lastReason: reason,
+      mode: options.dryRun ? 'dry' : 'live',
+      stepLabel: stepLabel(controller.step, options.profile),
+      stepCount: options.profile.ladder.length,
+      warning: warningActive ? warningKind : null,
+      ratelimitRemaining: rateLimitValue(options.helix.remaining),
+      ratelimitLimit: rateLimitValue(options.helix.limit),
+      paceSource: 'measured',
+      badge: null,
     });
     await writeLog(logPath, {
       t: new Date(nowMs).toISOString(),

@@ -14,6 +14,7 @@ type HelixOptions = {
 
 export class Helix {
   remaining: string | null = null;
+  limit: string | null = null;
   reset: string | null = null;
   clientId: string;
   tokens: Tokens;
@@ -46,6 +47,7 @@ export class Helix {
 
   private keepRateLimit(response: Response): void {
     this.remaining = response.headers.get('Ratelimit-Remaining');
+    this.limit = response.headers.get('Ratelimit-Limit');
     this.reset = response.headers.get('Ratelimit-Reset');
   }
 

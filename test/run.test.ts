@@ -42,6 +42,7 @@ async function openRun(options: {
   let settings = { ...baselineSettings };
   const helix = {
     remaining: '100',
+    limit: '800',
     request: async (path: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET';
       options.methods.push(`${method} ${path}`);
@@ -111,6 +112,13 @@ test('run prints one status line per window in dry and live modes', async () => 
       await run.clock.seconds(1);
       const statuses = logs.filter((entry): entry is string => typeof entry === 'string');
       if (dryRun) assert.doesNotMatch(JSON.stringify(logs), /modeled/);
+      assert.equal(run.handle.display.mode, dryRun ? 'dry' : 'live');
+      assert.equal(run.handle.display.stepLabel, 'normal');
+      assert.equal(run.handle.display.stepCount, 5);
+      assert.equal(run.handle.display.warning, null);
+      assert.equal(run.handle.display.ratelimitRemaining, 100);
+      assert.equal(run.handle.display.ratelimitLimit, 800);
+      assert.equal(run.handle.display.paceSource, 'measured');
       assert.deepEqual(statuses, [
         `pace 0.4/s, setpoint 6/s, step 0 of 5 (${dryRun ? 'dry' : 'live'})`,
         `pace 0.4/s, setpoint 6/s, step 0 of 5 (${dryRun ? 'dry' : 'live'})`,
