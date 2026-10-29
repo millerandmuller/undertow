@@ -1,4 +1,4 @@
-export const GAUGE_HUB = Object.freeze({ x: 200, y: 145 });
+export const GAUGE_HUB = Object.freeze({ x: 200, y: 170 });
 export const GAUGE_RADIUS = 140;
 
 export function paceAngle(value, setpoint) {
@@ -39,7 +39,7 @@ export function tickEndpoints(
   };
 }
 
-export function labelAnchor(value, setpoint, radius = 118, hub = GAUGE_HUB) {
+export function labelAnchor(value, setpoint, radius = 150, hub = GAUGE_HUB) {
   const angle = paceAngle(value, setpoint) * Math.PI / 180;
   return polarPoint(angle, radius, hub);
 }
@@ -62,6 +62,33 @@ export function warningChip(warning) {
   if (warning === 'gift') return 'gift wave';
   if (warning === 'raid') return 'raid';
   return null;
+}
+
+export function createWarningMemory() {
+  return { kind: null, untilMs: 0 };
+}
+
+export function warningChipFromState(state, nowMs, memory) {
+  if (state.warning) {
+    if (memory.kind !== state.warning || nowMs >= memory.untilMs) {
+      memory.kind = state.warning;
+      memory.untilMs = nowMs + state.warningHoldSeconds * 1000;
+    }
+    return state.warning;
+  }
+  if (state.mode === 'simulation' && memory.kind && nowMs < memory.untilMs) {
+    return memory.kind;
+  }
+  memory.kind = null;
+  memory.untilMs = 0;
+  return null;
+}
+
+export function updateWarningElement(element, state, nowMs, memory) {
+  const chip = warningChip(warningChipFromState(state, nowMs, memory));
+  element.textContent = chip ?? '';
+  element.classList.toggle('hidden', chip === null);
+  return chip !== null;
 }
 
 export function isStale(nowMs, lastSignalMs, timeoutMs = 5000) {

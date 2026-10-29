@@ -1,12 +1,13 @@
 import {
   GAUGE_HUB,
   arcPath,
+  createWarningMemory,
   labelAnchor,
   isStale,
   paceAngle,
   stepDots,
   tickEndpoints,
-  warningChip,
+  updateWarningElement,
 } from './gauge.js';
 
 const card = document.querySelector('#card');
@@ -35,6 +36,7 @@ document.documentElement.style.setProperty('--scale', String(scale));
 let latest = null;
 let lastSignalAt = Date.now();
 let connectionLost = false;
+const warningMemory = createWarningMemory();
 
 function setTick(value, setpoint) {
   const points = tickEndpoints(value, setpoint);
@@ -76,9 +78,7 @@ function render(state) {
   const duplicateSimulationMode = state.mode === 'simulation' &&
     state.badge?.toUpperCase() === 'SIMULATION';
   mode.classList.toggle('hidden', duplicateSimulationMode);
-  const warningText = warningChip(state.warning);
-  warning.textContent = warningText ?? '';
-  warning.classList.toggle('hidden', warningText === null);
+  updateWarningElement(warning, state, Date.now(), warningMemory);
   over.classList.toggle('hidden', setpointValue <= 0 ||
     paceValue <= setpointValue * 2.5);
   needle.style.transform = `rotate(${90 - angle}deg)`;
@@ -98,6 +98,9 @@ function render(state) {
 
 function showConnectionState() {
   const stale = isStale(Date.now(), lastSignalAt);
+  if (latest?.mode === 'simulation' && latest.warning === null) {
+    updateWarningElement(warning, latest, Date.now(), warningMemory);
+  }
   card.classList.toggle('stale', stale || connectionLost);
   if (connectionLost || stale) reason.textContent = 'reconnecting';
   else if (latest) reason.textContent = latest.lastReason || 'waiting for chat';

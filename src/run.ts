@@ -45,6 +45,7 @@ export type DisplayState = {
   stepLabel: string;
   stepCount: number;
   warning: 'gift' | 'raid' | null;
+  warningHoldSeconds: number;
   ratelimitRemaining: number | null;
   ratelimitLimit: number | null;
   paceSource: 'measured' | 'modeled';
@@ -54,7 +55,7 @@ export type DisplayState = {
   publish(next: Pick<DisplayState, 'pace' | 'setpoint' | 'step' | 'lastReason'> &
     Partial<Pick<DisplayState,
       'mode' | 'stepLabel' | 'stepCount' | 'warning' | 'ratelimitRemaining' |
-      'ratelimitLimit' | 'paceSource' | 'badge'>>): void;
+      'ratelimitLimit' | 'paceSource' | 'badge' | 'warningHoldSeconds'>>): void;
 };
 
 export function createDisplayState(
@@ -70,6 +71,7 @@ export function createDisplayState(
     stepLabel: 'normal',
     stepCount: 5,
     warning: null,
+    warningHoldSeconds: 0,
     ratelimitRemaining: null,
     ratelimitLimit: null,
     paceSource: 'measured',
@@ -559,6 +561,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       stepLabel: stepLabel(controller.step, options.profile),
       stepCount: options.profile.ladder.length,
       warning: warningActive ? warningKind : null,
+      warningHoldSeconds: options.profile.warning_hold_s,
       ratelimitRemaining: rateLimitValue(options.helix.remaining),
       ratelimitLimit: rateLimitValue(options.helix.limit),
       paceSource: 'measured',

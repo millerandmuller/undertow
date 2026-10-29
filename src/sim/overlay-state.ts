@@ -12,6 +12,7 @@ export function simulationOverlayOptions(modeled: boolean): OverlayOptions {
         stepLabel: state.stepLabel,
         stepCount: state.stepCount,
         warning: state.warning,
+        warningHoldSeconds: state.warningHoldSeconds,
         ratelimitRemaining: state.ratelimitRemaining,
         ratelimitLimit: state.ratelimitLimit,
         paceSource: modeled ? 'modeled' : 'measured',

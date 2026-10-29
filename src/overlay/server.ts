@@ -30,6 +30,7 @@ function snapshot(state: DisplayState): OverlaySnapshot {
     stepLabel: state.stepLabel,
     stepCount: state.stepCount,
     warning: state.warning,
+    warningHoldSeconds: state.warningHoldSeconds,
     ratelimitRemaining: state.ratelimitRemaining,
     ratelimitLimit: state.ratelimitLimit,
     paceSource: state.paceSource,

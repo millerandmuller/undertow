@@ -7,6 +7,7 @@ import {
   GAUGE_HUB,
   GAUGE_RADIUS,
   arcPath,
+  createWarningMemory,
   labelAnchor,
   isStale,
   paceAngle,
@@ -14,6 +15,8 @@ import {
   stepDots,
   tickEndpoints,
   warningChip,
+  updateWarningElement,
+  warningChipFromState,
 } from '../src/overlay/public/gauge.js';
 import { simulationOverlayOptions } from '../src/sim/overlay-state.ts';
 
@@ -41,15 +44,18 @@ test('gauge math maps range, clamps, and handles invalid input', () => {
 test('gauge geometry draws the dome and shares its arc with the needle and tick', async () => {
   const htmlPath = new URL('../src/overlay/public/index.html', import.meta.url);
   const cssPath = new URL('../src/overlay/public/overlay.css', import.meta.url);
+  const jsPath = new URL('../src/overlay/public/overlay.js', import.meta.url);
   const html = await readFile(htmlPath, 'utf8');
   const css = await readFile(cssPath, 'utf8');
-  assert.equal(arcPath(), 'M 60 145 A 140 140 0 0 1 340 145');
+  const js = await readFile(jsPath, 'utf8');
+  assert.equal(arcPath(), 'M 60 170 A 140 140 0 0 1 340 170');
   const zero = pointOnArc(0, 2);
   assert.ok(Math.abs(zero.x - 60) < 1e-8);
-  assert.ok(Math.abs(zero.y - 145) < 1e-8);
+  assert.ok(Math.abs(zero.y - 170) < 1e-8);
   assert.ok(Math.abs(pointOnArc(5, 2).x - 340) < 1e-8);
   const pace = pointOnArc(2, 2);
   const tick = tickEndpoints(2, 2);
+  const label = labelAnchor(2, 2);
   assert.ok(Math.abs(paceAngle(2, 2) - 108) < 1e-8);
   assert.ok(Math.abs(180 - paceAngle(2, 2) - 72) < 1e-8);
   assert.ok(Math.abs(tick.outer.x - GAUGE_HUB.x -
@@ -63,17 +69,22 @@ test('gauge geometry draws the dome and shares its arc with the needle and tick'
   ) < 1e-8);
   assert.ok(Math.abs(pointOnArc(100, 2).x - 340) < 1e-8);
   assert.equal(labelAnchor(2, 2).x < GAUGE_HUB.x, true);
+  assert.ok(Math.hypot(label.x - GAUGE_HUB.x, label.y - GAUGE_HUB.y) > 148);
+  assert.ok(label.y < GAUGE_HUB.y - GAUGE_RADIUS);
   assert.ok(Number.isFinite(pointOnArc(Number.NaN, 2).x));
-  assert.match(html, /A 140 140 0 0 1 340 145/);
+  assert.match(html, /A 140 140 0 0 1 340 170/);
   assert.doesNotMatch(css, /\.metrics\s*\{[^}]*position:\s*absolute/s);
   assert.doesNotMatch(css, /\.reason\s*\{[^}]*position:\s*absolute/s);
   assert.doesNotMatch(css, /position:\s*absolute/);
-  assert.match(css, /width: 520px;/);
+  assert.match(css, /\.card\s*\{[^}]*width: 520px/s);
   assert.match(css, /transform: scale\(var\(--scale\)\)/);
   assert.match(css, /width: calc\(560px \* var\(--scale\)\)/);
+  assert.match(js, /params\.get\('scale'\)/);
+  assert.match(js, /style\.setProperty\('--scale'/);
   assert.match(css, /\.gauge\s*\{[^}]*flex: 0 0 122px/s);
-  assert.match(css, /\.scale-label\s*\{[^}]*font-size: 27px/s);
-  assert.match(css, /\.setpoint-label\s*\{[^}]*font-size: 27px/s);
+  assert.match(css, /\.scale-label\s*\{[^}]*font-size: 28px/s);
+  assert.match(css, /\.setpoint-label\s*\{[^}]*font-size: 28px/s);
+  assert.ok(28 * 92 / 180 >= 14);
   assert.match(css, /\.rate span\s*\{[^}]*font-size: 12px/s);
 });
 
@@ -84,6 +95,37 @@ test('warning chip and stale state are pure and recover on the next signal', () 
   assert.equal(isStale(4999, 0), false);
   assert.equal(isStale(5000, 0), true);
   assert.equal(isStale(5001, 5001), false);
+});
+
+test('warning chip DOM update shows raid and holds simulated warnings in wall time', () => {
+  const memory = createWarningMemory();
+  const classes = new Set(['hidden']);
+  const fake = {
+    textContent: '',
+    classList: {
+      toggle(name, active) {
+        if (active) classes.add(name);
+        else classes.delete(name);
+      },
+    },
+  };
+  const active = {
+    warning: 'raid',
+    warningHoldSeconds: 10,
+    mode: 'simulation',
+  };
+  assert.equal(updateWarningElement(fake, active, 100, memory), true);
+  assert.equal(fake.textContent, 'raid');
+  assert.equal(classes.has('hidden'), false);
+  assert.equal(warningChipFromState({ ...active, warning: null }, 200, memory), 'raid');
+  assert.equal(warningChipFromState({ ...active, warning: null }, 10_100, memory), null);
+  assert.equal(updateWarningElement(
+    fake,
+    { ...active, warning: null },
+    10_100,
+    memory,
+  ), false);
+  assert.equal(classes.has('hidden'), true);
 });
 
 test('simulation projection labels modeled pace without changing the run state', () => {
@@ -136,6 +178,7 @@ test('overlay state, event stream ordering, heartbeat, and stop cleanup', async 
     lastReason: 'slow mode 3 s',
     stepLabel: 'slow 3 s',
     warning: 'gift',
+    warningHoldSeconds: 0,
     ratelimitRemaining: 450,
     ratelimitLimit: 800,
   });
@@ -149,6 +192,7 @@ test('overlay state, event stream ordering, heartbeat, and stop cleanup', async 
     stepLabel: 'slow 3 s',
     stepCount: 5,
     warning: 'gift',
+    warningHoldSeconds: 0,
     ratelimitRemaining: 450,
     ratelimitLimit: 800,
     paceSource: 'measured',
