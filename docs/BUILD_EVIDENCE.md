@@ -62,7 +62,14 @@ with product names removed and replaced with neutral wording.
 | 3f05022 | 2026-10-29T14:24:54-05:00 | Refresh generated build evidence | 018 |
 | 335dc01 | 2026-10-29T14:34:47-05:00 | Reconcile timed-out chat setting changes | - |
 | b908bc4 | 2026-10-29T14:34:49-05:00 | Document archived storm logs and reviewed turns | - |
+| a44478f | 2026-10-29T14:35:03-05:00 | Refresh generated build evidence | - |
+| d49f830 | 2026-10-29T15:55:17-05:00 | Replay recorded settings without treating own echoes as manual | - |
+| 0878f33 | 2026-10-29T15:55:31-05:00 | Document echo handling and pin shipped replay output | - |
+| 8b38ef9 | 2026-10-29T16:37:16-05:00 | Add MIT license and measured load test results | - |
+| e307350 | 2026-10-29T16:54:04-05:00 | Distinguish scripted replay rates from recorded chat | - |
+| 1e59f1f | 2026-10-29T16:54:07-05:00 | Pin session turn count and explain evidence numbering | - |
 
 Turn numbers are the numbered build requests sent into the single Codex
 thread. Commits without a number were made in turns whose mapping was not
-recorded.
+recorded. The thread count in the README is counted from the session file;
+numbered requests and counted turns differ because requests were resent or split.
