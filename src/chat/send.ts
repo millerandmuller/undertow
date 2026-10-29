@@ -8,7 +8,17 @@ export type ChatSendRequest = {
 };
 
 type ChatSendResponse = {
-  data: { is_sent: boolean; drop_reason: string | null }[];
+  data: {
+    is_sent: boolean;
+    drop_reason: string | null;
+    message_id: string | null;
+  }[];
+};
+
+export type ChatSendResult = {
+  is_sent: boolean;
+  drop_reason: string | null;
+  message_id: string | null;
 };
 
 export type ChatSenderOptions = {
@@ -34,13 +44,13 @@ export class ChatSender {
     this.log = options.log ?? console.log;
   }
 
-  async send(message: string, replyParentMessageId?: string): Promise<boolean> {
+  async send(message: string, replyParentMessageId?: string): Promise<ChatSendResult> {
     if (message.trim().length === 0) throw new Error('Chat message must not be empty');
     if (message.length > 500) throw new Error('Chat message must be 500 characters or fewer');
     const nowMs = this.now();
     if (nowMs - this.lastAttemptMs < 3000) {
       this.log({ type: 'chat_rate_limited', reason: 'one reply per 3 seconds' });
-      return false;
+      return { is_sent: false, drop_reason: null, message_id: null };
     }
     this.lastAttemptMs = nowMs;
     const body: ChatSendRequest = {
@@ -56,8 +66,16 @@ export class ChatSender {
     const result = response.data[0];
     if (!result.is_sent) {
       this.log({ type: 'chat_message_dropped', drop_reason: result.drop_reason });
-      return false;
+      return {
+        is_sent: false,
+        drop_reason: result.drop_reason,
+        message_id: result.message_id,
+      };
     }
-    return true;
+    return {
+      is_sent: true,
+      drop_reason: null,
+      message_id: result.message_id,
+    };
   }
 }

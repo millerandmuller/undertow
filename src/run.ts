@@ -339,6 +339,9 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
   let warningKind: 'gift' | 'raid' | null = null;
   let overrideUntilMs = 0;
   let lastMessageId: string | null = null;
+  const sentMessageIds = new Set<string>();
+  const sentMessageOrder: string[] = [];
+  let lastReplyParentId: string | null = null;
   let stopped = false;
   let paused = false;
   let retryAfterMs = 0;
@@ -392,9 +395,22 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     return stopOperation;
   };
 
-  async function sendNotice(notice: Notice | null): Promise<void> {
-    if (!notice || options.dryRun || !lastMessageId) return;
-    await sender.send(notice.message, lastMessageId);
+  async function sendNotice(notice: Notice | null): Promise<string | null> {
+    if (!notice || options.dryRun || !lastMessageId) return null;
+    const parentId = sentMessageIds.has(lastMessageId) ? undefined : lastMessageId;
+    const result = await sender.send(notice.message, parentId);
+    if (result.is_sent && result.message_id) rememberSentId(result.message_id);
+    return result.is_sent ? parentId ?? null : null;
+  }
+
+  function rememberSentId(messageId: string): void {
+    if (sentMessageIds.has(messageId)) return;
+    sentMessageIds.add(messageId);
+    sentMessageOrder.push(messageId);
+    if (sentMessageOrder.length > 20) {
+      const expired = sentMessageOrder.shift();
+      if (expired) sentMessageIds.delete(expired);
+    }
   }
 
   async function processManualSettings(event: ChatSettingsNotification): Promise<void> {
@@ -506,6 +522,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
         manualOverrideUntilMs: overrideUntilMs,
       }, options.profile);
     const notice = actionNotice(decision.action, options.profile, pace);
+    lastReplyParentId = null;
     let reason = paused ? 'login needed' : reasonFor(decision.action, notice);
     if (!paused && lastMessageId === null && decision.action.type === 'none') {
       reason = 'waiting for chat';
@@ -520,7 +537,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
         controller = decision.state;
         if (notice) {
           try {
-            await sendNotice(notice);
+            lastReplyParentId = await sendNotice(notice);
           } catch (error) {
             const message = errorMessage(error);
             if (isLoginFailure(message)) {
@@ -576,7 +593,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       step: controller.step,
       action: options.dryRun ? `dry_${decision.action.type}` : decision.action.type,
       reason,
-      reply_id: lastMessageId,
+      reply_id: lastReplyParentId,
       ratelimit_remaining: options.helix.remaining,
     });
     if (nowMs >= nextStatusAtMs) {

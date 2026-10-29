@@ -28,8 +28,9 @@ A step up needs pace above the setpoint for 20 s and the current rung held for
 20 s; a step down needs pace below half the setpoint for 30 s, one rung at a time
 without skipping.
 
-Each change posts one threaded reply that explains the setting and release
-condition. For example: “Slow mode 10 s: chat hit 14 msgs/s. Back to normal when
+Each change replies to the latest message from someone else, or is unthreaded
+when the latest message was Undertow's own reply. For example: “Slow mode 10 s:
+chat hit 14 msgs/s. Back to normal when
 it drops under 3 msgs/s for 30 s.” The streamer's own manual change always wins:
 Undertow yields for the override hold. It saves the baseline before changing
 settings and restores that baseline on exit.

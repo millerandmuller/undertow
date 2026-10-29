@@ -18,9 +18,13 @@ test('chat sender includes reply parent id and both broadcaster ids', async () =
   const sender = senderFor(async (requestPath, init) => {
     path = requestPath;
     body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-    return { data: [{ is_sent: true, drop_reason: null }] };
+    return { data: [{ is_sent: true, drop_reason: null, message_id: 'sent-1' }] };
   });
-  assert.equal(await sender.send('Thanks for the message.', 'parent-123'), true);
+  assert.deepEqual(await sender.send('Thanks for the message.', 'parent-123'), {
+    is_sent: true,
+    drop_reason: null,
+    message_id: 'sent-1',
+  });
   assert.equal(path, 'chat/messages');
   assert.equal(body.broadcaster_id, 'streamer-id');
   assert.equal(body.sender_id, 'streamer-id');
@@ -32,9 +36,9 @@ test('chat sender logs a rejected message once without retrying', async () => {
   const logs: unknown[] = [];
   const sender = senderFor(async () => {
     requests++;
-    return { data: [{ is_sent: false, drop_reason: 'automod' }] };
+    return { data: [{ is_sent: false, drop_reason: 'automod', message_id: null }] };
   }, () => 10_000, (entry) => logs.push(entry));
-  assert.equal(await sender.send('A clear note.'), false);
+  assert.equal((await sender.send('A clear note.')).is_sent, false);
   assert.equal(requests, 1);
   assert.equal(logs.length, 1);
 });
@@ -43,7 +47,7 @@ test('chat sender rejects over-long messages before a request', async () => {
   let requests = 0;
   const sender = senderFor(async () => {
     requests++;
-    return { data: [{ is_sent: true, drop_reason: null }] };
+    return { data: [{ is_sent: true, drop_reason: null, message_id: 'sent' }] };
   });
   await assert.rejects(sender.send('x'.repeat(501)), /500 characters/);
   assert.equal(requests, 0);
@@ -55,12 +59,12 @@ test('chat sender limits outbound messages to one per three seconds', async () =
   const logs: unknown[] = [];
   const sender = senderFor(async () => {
     requests++;
-    return { data: [{ is_sent: true, drop_reason: null }] };
+    return { data: [{ is_sent: true, drop_reason: null, message_id: 'sent' }] };
   }, () => nowMs, (entry) => logs.push(entry));
-  assert.equal(await sender.send('First.'), true);
-  assert.equal(await sender.send('Too soon.'), false);
+  assert.equal((await sender.send('First.')).is_sent, true);
+  assert.equal((await sender.send('Too soon.')).is_sent, false);
   nowMs += 3000;
-  assert.equal(await sender.send('Next.'), true);
+  assert.equal((await sender.send('Next.')).is_sent, true);
   assert.equal(requests, 2);
   assert.equal(logs.length, 1);
 });

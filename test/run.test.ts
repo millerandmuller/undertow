@@ -37,15 +37,28 @@ async function openRun(options: {
   clock?: SimulatedClock;
   logs: unknown[];
   methods: string[];
+  requests?: { path: string; body: Record<string, unknown> }[];
 }) {
   FakeSocket.reset();
   let settings = { ...baselineSettings };
+  let sentIndex = 0;
   const helix = {
     remaining: '100',
     limit: '800',
     request: async (path: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET';
       options.methods.push(`${method} ${path}`);
+      if (path === 'chat/messages') {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        options.requests?.push({ path, body });
+        return {
+          data: [{
+            is_sent: true,
+            drop_reason: null,
+            message_id: `undertow-${sentIndex++}`,
+          }],
+        };
+      }
       if (path.startsWith('chat/settings') && method === 'PATCH') {
         settings = { ...settings, ...JSON.parse(String(init.body)) };
         return { data: [] };
@@ -76,19 +89,113 @@ async function openRun(options: {
   return { handle: await starting, clock, socket: FakeSocket.instances[0] };
 }
 
-function rawChatEvent(id: string): unknown {
+function rawChatEvent(id: string, chatterId = '9'): unknown {
   return {
     metadata: { message_type: 'notification', message_id: `event-${id}` },
     payload: {
       subscription: { type: 'channel.chat.message' },
       event: {
         broadcaster_user_id: '42',
-        chatter_user_id: '9',
+        chatter_user_id: chatterId,
         message_id: id,
         message: { text: 'hello' },
       },
     },
   };
+}
+
+async function withLiveRun(
+  callback: (run: Awaited<ReturnType<typeof openRun>>, requests:
+    { path: string; body: Record<string, unknown> }[], logs: unknown[],
+    directory: string) => Promise<void>,
+): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), 'undertow-threading-'));
+  const logs: unknown[] = [];
+  const requests: { path: string; body: Record<string, unknown> }[] = [];
+  const run = await openRun({
+    directory,
+    dryRun: false,
+    logs,
+    methods: [],
+    requests,
+  });
+  try {
+    await callback(run, requests, logs, directory);
+  } finally {
+    await run.handle.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test('reply threading follows the latest foreign message, not our own echo', async () => {
+  await withLiveRun(async (run, requests, _logs, directory) => {
+    await sendEvent(run, rawChatEvent('viewer-1'));
+    await sendEvent(run, raidEvent('raid-1'));
+    assert.equal(requests[0].body.reply_parent_message_id, 'viewer-1');
+
+    await run.clock.seconds(3);
+    await sendEvent(run, rawChatEvent('undertow-0', '42'));
+    await sendEvent(run, raidEvent('raid-2'));
+    assert.equal('reply_parent_message_id' in requests[1].body, false);
+    const stormLines = (await readFile(join(directory, 'storm.log.jsonl'), 'utf8'))
+      .trim().split('\n');
+    assert.equal(JSON.parse(stormLines.at(-1) ?? '{}').reply_id, null);
+
+    await run.clock.seconds(3);
+    await sendEvent(run, rawChatEvent('viewer-2'));
+    await sendEvent(run, raidEvent('raid-3'));
+    assert.equal(requests[2].body.reply_parent_message_id, 'viewer-2');
+  });
+});
+
+test('a hand-typed broadcaster message remains a valid reply parent', async () => {
+  await withLiveRun(async (run, requests) => {
+    await sendEvent(run, rawChatEvent('broadcaster-hand-typed', '42'));
+    await sendEvent(run, raidEvent('raid-hand-typed'));
+    assert.equal(
+      requests[0].body.reply_parent_message_id,
+      'broadcaster-hand-typed',
+    );
+  });
+});
+
+test('sent message id memory stays bounded to the latest 20 ids', async () => {
+  await withLiveRun(async (run, requests) => {
+    await sendEvent(run, rawChatEvent('viewer-start'));
+    for (let index = 0; index < 21; index++) {
+      await sendEvent(run, raidEvent(`raid-${index}`));
+      await run.clock.seconds(3);
+    }
+    await sendEvent(run, rawChatEvent('undertow-0', '42'));
+    await sendEvent(run, raidEvent('raid-after-eviction'));
+    assert.equal(requests.length, 22);
+    assert.equal(
+      requests[21].body.reply_parent_message_id,
+      'undertow-0',
+    );
+  });
+});
+
+function raidEvent(id: string): unknown {
+  return {
+    metadata: { message_type: 'notification', message_id: `event-${id}` },
+    payload: {
+      subscription: { type: 'channel.raid' },
+      event: {
+        from_broadcaster_user_id: '9',
+        to_broadcaster_user_id: '42',
+        viewers: 4,
+      },
+    },
+  };
+}
+
+async function sendEvent(
+  run: Awaited<ReturnType<typeof openRun>>,
+  event: unknown,
+): Promise<void> {
+  run.socket.sendMessage(event);
+  await new Promise((resolve) => setImmediate(resolve));
 }
 
 test('run prints one status line per window in dry and live modes', async () => {
