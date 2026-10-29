@@ -1,7 +1,7 @@
 import type { OverlayOptions } from '../overlay/server.ts';
 import { labelRateText } from './response-model.ts';
 
-export function simulationOverlayOptions(modeled: boolean): OverlayOptions {
+export function simulationOverlayOptions(modeled: boolean, synthetic = false): OverlayOptions {
   return {
     mapState(state) {
       return {
@@ -17,7 +17,9 @@ export function simulationOverlayOptions(modeled: boolean): OverlayOptions {
         ratelimitLimit: state.ratelimitLimit,
         paceSource: modeled ? 'modeled' : 'measured',
         badge: 'SIMULATION',
-        lastReason: labelRateText(state.lastReason, modeled ? 'modeled' : 'recorded'),
+        lastReason: labelRateText(
+          state.lastReason, modeled ? 'modeled' : synthetic ? 'scripted' : 'recorded',
+        ),
       };
     },
   };

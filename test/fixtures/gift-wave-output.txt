@@ -8,11 +8,11 @@ RESPONSE MODEL: synthetic assumption, not measured (replays/response-model.json)
 149s pace 0.1/s (modeled), setpoint 1.5/s (configured), step 2, step_down: Easing to slow mode 10 s. Next step down in 15 s if chat stays under 0.75 msgs/s (configured).
 164s pace 0.4/s (modeled), setpoint 1.5/s (configured), step 1, step_down: Easing to slow mode 3 s. Back to normal in 15 s if chat stays under 0.75 msgs/s (configured).
 179s pace 0.1/s (modeled), setpoint 1.5/s (configured), step 0, restore: Chat is back to normal. Settings restored.
-summary modeled peak pace 6.1 msgs/s (modeled); recorded peak pace 6.1 msgs/s (recorded)
+summary modeled peak pace 6.1 msgs/s (modeled); scripted peak pace 6.1 msgs/s (scripted)
 modeled pace before the first step-up 6.1 msgs/s (modeled)
 modeled pace after the last step-up 1.2 msgs/s (modeled)
-recorded pace before the first step-up 6.1 msgs/s (recorded)
-recorded pace after the last step-up 3.9 msgs/s (recorded)
+scripted pace before the first step-up 6.1 msgs/s (scripted)
+scripted pace after the last step-up 3.9 msgs/s (scripted)
 steps taken 4; time to restore after final step-up 88 s
 final settings equal baseline: yes
 deterministic: 1 of 1 runs identical

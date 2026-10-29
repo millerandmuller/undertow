@@ -305,7 +305,7 @@ test('run recording writes redacted replay events accepted by the loader', async
   }
 });
 
-test('replay output labels modeled and recorded rates and needs no credentials', async () => {
+test('replay output labels each rate source and needs no credentials', async () => {
   const directory = await temporaryDirectory();
   try {
     const repeatedOverlay = spawnSync(process.execPath, [
@@ -334,8 +334,11 @@ test('replay output labels modeled and recorded rates and needs no credentials',
     const rateSummary = result.stdout.split('\n').filter((line) =>
       /pace|msgs\/s/.test(line));
     assert.ok(rateSummary.length >= 3);
-    assert.ok(rateSummary.every((line) => /modeled|recorded/.test(line)));
+    assert.ok(rateSummary.every((line) => /modeled|scripted/.test(line)));
     assert.ok(result.stdout.includes('modeled pace after the last step-up'));
+    const modeledMoves = result.stdout.split('\n').filter((line) => /^\d+s pace/.test(line));
+    assert.ok(modeledMoves.every((line) => /pace [0-9.]+\/s \(modeled\)/.test(line)));
+    assert.ok(modeledMoves.every((line) => !/recorded|scripted/.test(line)));
     const savedDecisions = await readFile(join(directory, 'replay.last.jsonl'), 'utf8');
     assert.match(savedDecisions, /"pace_source":"modeled"/);
     assert.match(savedDecisions, /msgs\/s \(modeled\)/);
@@ -350,7 +353,8 @@ test('replay output labels modeled and recorded rates and needs no credentials',
     assert.equal(openLoop.status, 0, openLoop.stderr);
     const openSummary = openLoop.stdout.split('\n').filter((line) =>
       /pace|msgs\/s/.test(line));
-    assert.ok(openSummary.every((line) => /recorded/.test(line)));
+    assert.ok(openSummary.every((line) => /scripted/.test(line)));
+    assert.doesNotMatch(openLoop.stdout, /recorded/i);
 
     const recordedPath = join(directory, 'recorded.jsonl');
     const syntheticReplay = await loadReplay('replays/gift-wave.jsonl');
@@ -367,6 +371,7 @@ test('replay output labels modeled and recorded rates and needs no credentials',
     });
     assert.equal(recordedOutput.status, 0, recordedOutput.stderr);
     assert.match(recordedOutput.stdout, /RECORDED STREAM: open loop/);
+    assert.doesNotMatch(recordedOutput.stdout, /scripted/i);
     assert.doesNotMatch(recordedOutput.stdout, /RESPONSE MODEL:/);
     assert.ok(recordedOutput.stdout.split('\n')
       .filter((line) => /pace|msgs\/s/.test(line))

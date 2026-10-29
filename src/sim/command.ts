@@ -53,8 +53,9 @@ function settingsMatchBaseline(result: ReplayResult): boolean {
       current.follower_mode_duration === baseline.follower_mode_duration);
 }
 
-function report(result: ReplayResult): void {
-  const rateLabel = result.modeled ? 'modeled' : 'recorded';
+function report(result: ReplayResult, synthetic: boolean): void {
+  const sourceLabel = synthetic ? 'scripted' : 'recorded';
+  const rateLabel = result.modeled ? 'modeled' : sourceLabel;
   const moves = result.decisions.filter((item) => item.action !== 'none');
   for (const item of moves) {
     console.log(
@@ -89,7 +90,7 @@ function report(result: ReplayResult): void {
   if (result.modeled) {
     console.log(
       `summary modeled peak pace ${modeledPeak.toFixed(1)} msgs/s (modeled); ` +
-      `recorded peak pace ${recordedPeak.toFixed(1)} msgs/s (recorded)`,
+      `${sourceLabel} peak pace ${recordedPeak.toFixed(1)} msgs/s (${sourceLabel})`,
     );
     console.log(
       `modeled pace before the first step-up ${modeledBefore.toFixed(1)} msgs/s ` +
@@ -99,20 +100,25 @@ function report(result: ReplayResult): void {
       `modeled pace after the last step-up ${modeledAfter.toFixed(1)} msgs/s (modeled)`,
     );
     console.log(
-      `recorded pace before the first step-up ${recordedBefore.toFixed(1)} msgs/s ` +
-      `(recorded)`,
+      `${sourceLabel} pace before the first step-up ${recordedBefore.toFixed(1)} msgs/s ` +
+      `(${sourceLabel})`,
     );
     console.log(
-      `recorded pace after the last step-up ${recordedAfter.toFixed(1)} msgs/s (recorded)`,
+      `${sourceLabel} pace after the last step-up ${recordedAfter.toFixed(1)} msgs/s ` +
+      `(${sourceLabel})`,
     );
   } else {
-    console.log(`summary recorded peak pace ${recordedPeak.toFixed(1)} msgs/s (recorded)`);
     console.log(
-      `recorded pace before the first step-up ${recordedBefore.toFixed(1)} msgs/s ` +
-      `(recorded)`,
+      `summary ${sourceLabel} peak pace ${recordedPeak.toFixed(1)} msgs/s ` +
+      `(${sourceLabel})`,
     );
     console.log(
-      `recorded pace after the last step-up ${recordedAfter.toFixed(1)} msgs/s (recorded)`,
+      `${sourceLabel} pace before the first step-up ${recordedBefore.toFixed(1)} msgs/s ` +
+      `(${sourceLabel})`,
+    );
+    console.log(
+      `${sourceLabel} pace after the last step-up ${recordedAfter.toFixed(1)} msgs/s ` +
+      `(${sourceLabel})`,
     );
   }
   console.log(`steps taken ${stepUps.length}; time to restore after final step-up ${restoredAt}`);
@@ -192,7 +198,7 @@ export async function replayCommand(args: string[]): Promise<void> {
   } else if (!replay.header.synthetic) {
     console.log('RECORDED STREAM: open loop; messages did not react to the controller.');
   } else {
-    console.log('RECORDED STREAM: model off; replay is open loop.');
+    console.log('SCRIPTED STREAM: model off; replay is open loop.');
   }
   let first: ReplayResult | null = null;
   let last: ReplayResult | null = null;
@@ -205,7 +211,7 @@ export async function replayCommand(args: string[]): Promise<void> {
       overlay = await startOverlayServer(
         display,
         overlayPort,
-        simulationOverlayOptions(modelEnabled),
+        simulationOverlayOptions(modelEnabled, replay.header.synthetic),
       );
       console.log(`overlay: ${overlay.url}`);
     };
@@ -227,7 +233,7 @@ export async function replayCommand(args: string[]): Promise<void> {
     await overlay?.stop();
   }
   if (!last) throw new Error('Replay did not run');
-  report(last);
+  report(last, replay.header.synthetic);
   await writeLastReplay(stateDirectory, last.decisions, last.modeled ? 'modeled' : 'recorded');
   console.log(`deterministic: ${runCount} of ${runCount} runs identical`);
 }

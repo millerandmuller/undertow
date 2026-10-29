@@ -277,3 +277,18 @@ test('overlay rejects Host headers outside the local address allowlist', async (
     await server.stop();
   }
 });
+
+for (const [modeled, synthetic, label] of [
+  [false, true, 'scripted'],
+  [false, false, 'recorded'],
+  [true, true, 'modeled'],
+] as const) {
+  test(`simulation overlay labels ${label} rate text`, () => {
+    const display = createDisplayState(2, 'live');
+    display.publish({ pace: 1.5, lastReason: 'chat hit 1.5 msgs/s' });
+    const project = simulationOverlayOptions(modeled, synthetic).mapState;
+    assert.ok(project);
+    assert.equal(project(display).lastReason, `chat hit 1.5 msgs/s (${label})`);
+    assert.equal(display.lastReason, 'chat hit 1.5 msgs/s');
+  });
+}

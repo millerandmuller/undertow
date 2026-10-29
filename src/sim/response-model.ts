@@ -65,7 +65,9 @@ export function messagePassesModel(
   return seededFraction(offsetMs, index) < fraction;
 }
 
-export function labelRateText(value: string, label: 'modeled' | 'recorded'): string {
+export type ReplayRateLabel = 'modeled' | 'recorded' | 'scripted';
+
+export function labelRateText(value: string, label: ReplayRateLabel): string {
   const paceLabeled = value.replace(
     /(chat hit|chat is at) ([0-9]+(?:\.[0-9]+)?) msgs\/s/g,
     `$1 $2 msgs/s (${label})`,
