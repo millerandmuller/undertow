@@ -116,7 +116,7 @@ is the only scope those accounts need to send their scripted lines.
 
 ## What is the load test
 
-The planned test uses up to eight labeled plain accounts owned by the team on
+The load test uses labeled plain accounts owned by the team on
 the team's test channel. The broadcaster is always `TWITCH_CHANNEL_LOGIN`;
 account files for that broadcaster are refused. The command uses whichever
 account files exist, and each sends neutral scripted lines with the visible
@@ -141,6 +141,30 @@ run `npm run loadtest -- --rate 0.5 --burst 90 --taper 30`. The test writes
 `.undertow/loadtest.state.json` and
 `.undertow/loadtest.log.jsonl`.
 
+## What the load test showed
+
+The recorded runs used eight labeled plain accounts owned by the team on the
+team's own channel, sending at 0.5 messages per second per account. The
+`loadtest` profile setpoint was 1.5 messages per second, with a release level
+of 0.75.
+
+The measured arc was about 2.3 to 0.9 msgs/s, scaled test, 8 labeled accounts,
+read from the overlay and the storm log as the controller reached the second
+step, slow mode 10 s. Before the first step, pace peaked near 3.5 to 3.7
+messages per second.
+
+Eight accounts under slow mode 10 s can send at most about 0.8 messages per
+second, one message every 10 seconds each, so the low end is near this setup's
+ceiling. The result shows Undertow changing Twitch's own settings and pace
+following; it does not show thresholds tuned for a real channel.
+
+The `real` profile, with its setpoint of 6 messages per second, has not been
+run on a real channel with real viewers.
+
+To set up today, use the runtime for the `node` commands above, register your
+own Twitch developer application, then run `npm run login` and enter the device
+code. There is no settings screen; configuration is `undertow.config.json`.
+
 ## The post-storm report
 
 Restarting during a storm archives the earlier log; report reads the current
@@ -164,6 +188,8 @@ each change, ran it against Twitch, and committed. The whole build continued in
 the single Codex thread `01a17fa0-44a2-7081-b2bc-68084379eebb`. The working
 rules are in `AGENTS.md`; build evidence and the commit list are in
 `docs/BUILD_EVIDENCE.md`.
+
+MIT, see LICENSE.
 
 ## Layout and tests
 
