@@ -323,9 +323,13 @@ try {
     await replayCommand(process.argv.slice(3));
   }
   else if (command === 'loadtest') await loadtest(process.argv.slice(3));
+  else if (command === 'report') {
+    const { reportCommand } = await import('./report/command.ts');
+    await reportCommand(process.argv.slice(3));
+  }
   else {
     throw new Error(
-      'Usage: node src/cli.ts <login|probe|watch|restore|run|replay|loadtest>',
+      'Usage: node src/cli.ts <login|probe|watch|restore|run|replay|loadtest|report>',
     );
   }
 } catch (error) {

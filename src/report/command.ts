@@ -1,0 +1,269 @@
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadConfig, type ProfileConfig } from '../config.ts';
+import { atomicJson, readJson } from '../util/files.ts';
+import { loadReplay } from '../sim/replay.ts';
+import { updateConfigAtomically } from './config-update.ts';
+import {
+  generateReport,
+  type CodexClock,
+  type CodexProcessRunner,
+} from './codex.ts';
+import { scoreScenario, type ReportScore } from './score.ts';
+import { parseReportCard, type ReportCard } from './schema.ts';
+
+export type SavedReport = {
+  card: ReportCard;
+  timestamp: string;
+  storm_hash: string;
+  profile: string;
+  codex_thread_id: string | null;
+};
+
+export type ReportCommandDependencies = {
+  stateDirectory?: string;
+  configPath?: string | URL;
+  processRunner?: CodexProcessRunner;
+  clock?: CodexClock;
+  output?: (line: string) => void;
+  now?: () => Date;
+  scorer?: typeof scoreScenario;
+};
+
+export function proposalRejection(
+  card: ReportCard,
+  profile: ProfileConfig,
+): string | null {
+  const low = Math.max(0.5, profile.setpoint_msgs_per_s / 2);
+  const high = profile.setpoint_msgs_per_s * 2;
+  if (card.proposed.setpoint < low || card.proposed.setpoint > high) {
+    return `setpoint must be between ${low} and ${high}`;
+  }
+  if (card.proposed.dwell_s < 5 || card.proposed.dwell_s > 120) {
+    return 'dwell_s must be between 5 and 120';
+  }
+  if (card.proposed.release_hold_s < 10 || card.proposed.release_hold_s > 300) {
+    return 'release_hold_s must be between 10 and 300';
+  }
+  return null;
+}
+
+export async function reportCommand(
+  args: string[],
+  dependencies: ReportCommandDependencies = {},
+): Promise<void> {
+  const output = dependencies.output ?? console.log;
+  const stateDirectory = dependencies.stateDirectory ??
+    process.env.UNDERTOW_STATE_DIR ?? '.undertow';
+  const configPath = typeof dependencies.configPath === 'string'
+    ? dependencies.configPath
+    : dependencies.configPath
+    ? fileURLToPath(dependencies.configPath)
+    : fileURLToPath(new URL('../../undertow.config.json', import.meta.url));
+  const savedPath = join(stateDirectory, 'report.last.json');
+  const stormPath = join(stateDirectory, 'storm.log.jsonl');
+  const savedOnly = args.includes('--saved');
+  const accept = args.includes('--accept');
+  const explicitProfile = option(args, '--profile');
+  let saved: SavedReport | null = null;
+  if (savedOnly) saved = await readSavedReport(savedPath);
+  const profileName = explicitProfile ?? (savedOnly ? saved?.profile : undefined) ??
+    process.env.UNDERTOW_PROFILE ?? 'real';
+  const profile = await loadConfig(profileName, configPath);
+  await readStormHash(stormPath, !savedOnly);
+  const scenario = option(args, '--scenario') ?? 'replays/gift-wave.jsonl';
+  let report: SavedReport;
+  let sourceLabel = 'Codex report';
+
+  if (savedOnly) {
+    if (!saved) throw new Error('No saved report exists; run undertow report after a storm');
+    report = saved;
+    sourceLabel = `saved report (${saved.timestamp})`;
+  } else {
+    const requested = await requestOrFallback({
+      savedPath,
+      profile,
+      profileName,
+      stateDirectory,
+      processRunner: dependencies.processRunner,
+      clock: dependencies.clock,
+      now: dependencies.now,
+      output,
+    });
+    report = requested.report;
+    if (requested.usedSaved) sourceLabel = `saved report (${report.timestamp})`;
+  }
+
+  output(sourceLabel);
+  output('storm readings: recorded');
+  printCard(report.card, profile, output);
+  const rejection = proposalRejection(report.card, profile);
+  if (rejection) {
+    output(`REJECTED: ${rejection}`);
+    if (accept) throw new Error('Rejected proposals cannot be accepted');
+    return;
+  }
+
+  const replay = await loadReplay(scenario);
+  const score = await (dependencies.scorer ?? scoreScenario)(
+    replay,
+    profile,
+    report.card.proposed,
+  );
+  printScore(score, output);
+  if (!accept) {
+    output('Proposal not applied. Re-run with --accept to apply it.');
+    return;
+  }
+  if (!score.passed) throw new Error('Proposal failed scoring and cannot be accepted');
+  const acceptanceHash = await readStormHash(stormPath, true);
+  if (!acceptanceHash || report.storm_hash !== acceptanceHash) {
+    throw new Error('Storm log changed since this report; proposal cannot be accepted');
+  }
+  printDiff(profileName, profile, report.card, output);
+  await updateConfigAtomically(configPath, profileName, report.card.proposed);
+  output('Applied.');
+}
+
+async function requestOrFallback(options: {
+  savedPath: string;
+  profile: ProfileConfig;
+  profileName: string;
+  stateDirectory: string;
+  processRunner?: CodexProcessRunner;
+  clock?: CodexClock;
+  now?: () => Date;
+  output: (line: string) => void;
+}): Promise<{ report: SavedReport; usedSaved: boolean }> {
+  try {
+    const generated = await generateReport({
+      stateDirectory: options.stateDirectory,
+      profileName: options.profileName,
+      profile: options.profile,
+      runner: options.processRunner,
+      clock: options.clock,
+      output: options.output,
+    });
+    const saved: SavedReport = {
+      card: generated.card,
+      timestamp: (options.now?.() ?? new Date()).toISOString(),
+      storm_hash: generated.stormHash,
+      profile: options.profileName,
+      codex_thread_id: generated.codexThreadId,
+    };
+    await atomicJson(options.savedPath, saved);
+    return { report: saved, usedSaved: false };
+  } catch {
+    const saved = await readSavedReport(options.savedPath);
+    if (saved) return { report: saved, usedSaved: true };
+    throw new Error('Codex report unavailable and no saved report exists');
+  }
+}
+
+export async function readSavedReport(path: string): Promise<SavedReport | null> {
+  try {
+    const raw = await readJson<Record<string, unknown>>(path);
+    if (!isObject(raw) || Object.keys(raw).length !== 5 ||
+      typeof raw.timestamp !== 'string' || typeof raw.storm_hash !== 'string' ||
+      typeof raw.profile !== 'string' ||
+      (raw.codex_thread_id !== null && typeof raw.codex_thread_id !== 'string')) {
+      throw new Error('saved report has invalid fields');
+    }
+    return {
+      card: parseReportCard(raw.card),
+      timestamp: raw.timestamp,
+      storm_hash: raw.storm_hash,
+      profile: raw.profile,
+      codex_thread_id: raw.codex_thread_id,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function readStormHash(
+  path: string,
+  required: boolean,
+): Promise<string | null> {
+  try {
+    const bytes = await readFile(path);
+    if (bytes.length === 0 || !bytes.toString('utf8').trim()) {
+      throw new Error('Storm log is empty; run Undertow during a storm first');
+    }
+    return createHash('sha256').update(bytes).digest('hex');
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Storm log is empty')) {
+      if (required) throw error;
+      return null;
+    }
+    if (required) {
+      throw new Error(`Storm log is missing at ${path}; run Undertow during a storm first`);
+    }
+    return null;
+  }
+}
+
+function printCard(
+  card: ReportCard,
+  profile: ProfileConfig,
+  output: (line: string) => void,
+): void {
+  output(`cause: ${card.cause}`);
+  output('steps:');
+  for (const step of card.steps) {
+    output(`  ${step.t} | ${step.action} | ${step.reading} (recorded)`);
+  }
+  output(`setpoint: ${profile.setpoint_msgs_per_s} msgs/s (configured) -> ` +
+    `${card.proposed.setpoint} msgs/s (proposed)`);
+  output(`dwell_s: ${profile.dwell_s} -> ${card.proposed.dwell_s}`);
+  output(`release_hold_s: ${profile.release_hold_s} -> ` +
+    `${card.proposed.release_hold_s}`);
+  output(`risk: ${card.risk}`);
+}
+
+function printScore(score: ReportScore, output: (line: string) => void): void {
+  const source = score.paceSource;
+  output(`current: peak pace ${score.current.peakPace.toFixed(1)} msgs/s (${source}); ` +
+    metricsText(score.current));
+  output(`proposed: peak pace ${score.proposed.peakPace.toFixed(1)} msgs/s (${source}); ` +
+    metricsText(score.proposed));
+  for (const criterion of score.criteria) {
+    output(`${criterion.passed ? 'PASS' : 'FAIL'}: ${criterion.name}`);
+  }
+  output(`VERDICT: ${score.passed ? 'PASS' : 'FAIL'} (${source} scores)`);
+}
+
+function metricsText(metrics: ReportScore['current']): string {
+  const restore = metrics.timeToRestoreSeconds === null
+    ? 'not restored'
+    : `${metrics.timeToRestoreSeconds.toFixed(1)} s`;
+  return `steps ${metrics.stepsTaken}, peak step ${metrics.peakStep}, ` +
+    `reversals ${metrics.reversalsWithinDwell}, restore ${restore}, ` +
+    `notices ${metrics.noticesSent}, baseline ` +
+    `${metrics.finalSettingsEqualBaseline ? 'yes' : 'no'}`;
+}
+
+function printDiff(
+  profileName: string,
+  profile: ProfileConfig,
+  report: ReportCard,
+  output: (line: string) => void,
+): void {
+  output(`config diff (${profileName}):`);
+  output(`  setpoint_msgs_per_s: ${profile.setpoint_msgs_per_s} -> ` +
+    `${report.proposed.setpoint}`);
+  output(`  dwell_s: ${profile.dwell_s} -> ${report.proposed.dwell_s}`);
+  output(`  release_hold_s: ${profile.release_hold_s} -> ` +
+    `${report.proposed.release_hold_s}`);
+}
+
+function option(args: string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
