@@ -103,11 +103,12 @@ test('notice strings are plain sentences within chat limit', () => {
   assert.equal(restore.message, 'Chat is back to normal. Settings restored.');
   assert.equal(
     easingSlow.message,
-    'Easing to slow mode 10 s: chat is at 2.4 msgs/s. ' +
-      'Next step down when it stays under 3 msgs/s for 30 s.',
+    'Easing to slow mode 10 s. Next step down in 20 s if chat stays under 3 msgs/s.',
   );
   assert.match(easingFollowers.message, /followers-only 10 min/);
   assert.match(easingFollowers.overlayText, /step 4 of 5/);
+  assert.match(stepDownNotice(profile.ladder[0], 1, 0, profile).message,
+    /Back to normal in 20 s if chat stays under 3 msgs\/s/);
   for (const notice of [step, easingSlow, easingFollowers, gift, raid, restore]) {
     assert.ok(notice.message.length <= 500);
     assert.equal(notice.message.endsWith('.'), true);

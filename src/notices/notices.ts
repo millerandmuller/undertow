@@ -56,8 +56,10 @@ export function stepDownNotice(
   pace: number,
   config: ProfileConfig,
 ): Notice {
-  const message = `Easing to ${step.label.toLowerCase()}: chat is at ${pace} msgs/s. ` +
-    `Next step down when it stays ${releaseCondition(config)}.`;
+  const release = config.setpoint_msgs_per_s * config.release_ratio;
+  const next = stepNumber === 1 ? 'Back to normal' : 'Next step down';
+  const message = `Easing to ${step.label.toLowerCase()}. ${next} in ${config.dwell_s} s ` +
+    `if chat stays under ${release} msgs/s.`;
   return bounded({
     kind: 'step_down',
     message,

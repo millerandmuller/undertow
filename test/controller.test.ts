@@ -266,3 +266,20 @@ test('display state publishes updates to subscribers', () => {
   display.publish({ pace: 9, setpoint: 6, step: 2, lastReason: 'later' });
   assert.deepEqual(steps, [0, 1]);
 });
+
+
+test('continued release steps follow dwell rather than a fresh release hold', async () => {
+  const config = await loadConfig('loadtest');
+  const simulation = makeSimulation(config);
+  tick(simulation, 8);
+  advance(simulation, 3 * config.dwell_s, 8);
+  assert.equal(simulation.state.step, 3);
+  tick(simulation, 0);
+  assert.equal(advance(simulation, config.release_hold_s, 0).at(-1)?.type, 'step_down');
+  assert.equal(simulation.state.step, 2);
+  assert.ok(config.dwell_s < config.release_hold_s);
+  assert.ok(advance(simulation, config.dwell_s - 1, 0)
+    .every((action) => action.type === 'none'));
+  assert.equal(advance(simulation, 1, 0).at(-1)?.type, 'step_down');
+  assert.equal(simulation.state.step, 1);
+});
