@@ -55,10 +55,13 @@ with product names removed and replaced with neutral wording.
 | f8875f5 | 2026-10-29T13:36:54-05:00 | Harden profile selection and report acceptance | 017 |
 | f6bf528 | 2026-10-29T13:36:56-05:00 | Protect manual settings and restore owned changes | 017 |
 | c0dbe89 | 2026-10-29T13:37:22-05:00 | Keep auth retry failures paused | 017 |
-| 4ca7295 | 2026-10-29T14:24:24-05:00 | Preserve manual ownership and bound request waits | - |
-| 9972876 | 2026-10-29T14:24:26-05:00 | Read labeled storm runs after legacy log prefixes | - |
-| cc876d2 | 2026-10-29T14:24:32-05:00 | Describe the dwell before the next easing step | - |
-| 16bdf0d | 2026-10-29T14:24:34-05:00 | Document scopes and reviewed build mappings | - |
+| 4ca7295 | 2026-10-29T14:24:24-05:00 | Preserve manual ownership and bound request waits | 018 |
+| 9972876 | 2026-10-29T14:24:26-05:00 | Read labeled storm runs after legacy log prefixes | 018 |
+| cc876d2 | 2026-10-29T14:24:32-05:00 | Describe the dwell before the next easing step | 018 |
+| 16bdf0d | 2026-10-29T14:24:34-05:00 | Document scopes and reviewed build mappings | 018 |
+| 3f05022 | 2026-10-29T14:24:54-05:00 | Refresh generated build evidence | 018 |
+| 335dc01 | 2026-10-29T14:34:47-05:00 | Reconcile timed-out chat setting changes | - |
+| b908bc4 | 2026-10-29T14:34:49-05:00 | Document archived storm logs and reviewed turns | - |
 
 Turn numbers are the numbered build requests sent into the single Codex
 thread. Commits without a number were made in turns whose mapping was not
