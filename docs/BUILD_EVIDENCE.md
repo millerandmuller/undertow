@@ -2,7 +2,9 @@
 
 This file records the commits on `main`, oldest first, with their author
 dates and subjects. It is generated from this repository’s `git log`.
-External product names in commit subjects are replaced with neutral wording.
+This file is generated before the commit that contains it, so that newest
+commit is not listed. Two subject lines (`452034d` and `f8ad96b`) are shown
+with product names removed and replaced with neutral wording.
 
 | Commit | Author date | Subject | Turn |
 | --- | --- | --- | --- |
@@ -45,6 +47,18 @@ External product names in commit subjects are replaced with neutral wording.
 | 6f5595f | 2026-10-29T06:33:02-05:00 | Label report readings from storm logs | 012 |
 | b376fdf | 2026-10-29T06:33:04-05:00 | Scale the overlay warning chip with the card | 012 |
 | 36f8ea3 | 2026-10-29T06:33:07-05:00 | Load environment for report and replay scripts | 012 |
+| 0247ed6 | 2026-10-29T10:27:28-05:00 | Document Undertow and generate build evidence | 013 |
+| 04b6fca | 2026-10-29T10:28:48-05:00 | Rewrite ladder explanation in README | 014 |
+| d6e9648 | 2026-10-29T12:10:05-05:00 | Add tolerant step-up sustain ratio | 015 |
+| d29bff9 | 2026-10-29T12:18:36-05:00 | Avoid threading replies onto Undertow notices | 016 |
+| 98ce7ce | 2026-10-29T13:36:52-05:00 | Make warning notices describe the pace response | 017 |
+| f8875f5 | 2026-10-29T13:36:54-05:00 | Harden profile selection and report acceptance | 017 |
+| f6bf528 | 2026-10-29T13:36:56-05:00 | Protect manual settings and restore owned changes | 017 |
+| c0dbe89 | 2026-10-29T13:37:22-05:00 | Keep auth retry failures paused | 017 |
+| 4ca7295 | 2026-10-29T14:24:24-05:00 | Preserve manual ownership and bound request waits | - |
+| 9972876 | 2026-10-29T14:24:26-05:00 | Read labeled storm runs after legacy log prefixes | - |
+| cc876d2 | 2026-10-29T14:24:32-05:00 | Describe the dwell before the next easing step | - |
+| 16bdf0d | 2026-10-29T14:24:34-05:00 | Document scopes and reviewed build mappings | - |
 
 Turn numbers are the numbered build requests sent into the single Codex
 thread. Commits without a number were made in turns whose mapping was not
