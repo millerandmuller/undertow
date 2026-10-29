@@ -1,141 +1,151 @@
 # Undertow
 
-Chat pace, held steady by Twitch's own dials, and explained to everyone in one sentence.
+## What it does (30 seconds)
 
-Work in progress. Built for the Codex x TwitchCon Hackathon (October 23 to November 2, 2026).
+Undertow listens to Twitch chat over EventSub and adjusts Twitch's own chat
+settings as the first closed-loop controller for chat pace on Twitch. The real
+profile setpoint is 6 messages per second, measured over a 10-second window.
+When pace stays above the setpoint for 20 seconds, it steps up one rung; it
+holds each rung for at least 20 seconds. It steps down one rung after pace stays
+below 3 messages per second for 30 seconds. Between 3 and 6 messages per second,
+hysteresis keeps the current setting in place.
 
-## Run Undertow
+1. Slow mode 3 s limits chatter frequency; it steps up after pace exceeds 6 for
+   20 seconds while the current rung has held 20 seconds, and steps down after
+   pace stays below 3 for 30 seconds, while pace between 3 and 6 holds steady.
+2. Slow mode 10 s tightens the per-chatter limit after the same high-pace dwell;
+   it eases down one rung after the same release hold, with the same hysteresis.
+3. Slow mode 30 s raises that limit one rung after the same high-pace dwell and
+   eases down one rung after the release hold, with the same hysteresis.
+4. Followers-only 10 min restricts chat to followers after the high-pace dwell;
+   it eases down one rung after the release hold, with the same hysteresis.
+5. Emote-only limits messages to emotes after the high-pace dwell and eases down
+   one rung after the release hold; the 3-to-6 range keeps the current setting.
 
-Use Node 25.4+ (native fetch, WebSocket, and TypeScript type stripping). Copy
-`.env.example` to `.env`, set `TWITCH_CLIENT_ID` and `TWITCH_CHANNEL_LOGIN`, then
-use the npm scripts below.
-They load `.env` automatically; clones without the file can still run commands such as
-`npm run probe` to see its plan. For Confidential Twitch apps, also set
-`TWITCH_CLIENT_SECRET`; it is used only when refreshing tokens.
+Each change posts one threaded reply that explains the setting and release
+condition. For example: “Slow mode 10 s: chat hit 14 msgs/s. Back to normal when
+it drops under 3 msgs/s for 30 s.” The streamer's own manual change always wins:
+Undertow yields for the override hold. It saves the baseline before changing
+settings and restores that baseline on exit.
 
-- `npm run login` — authenticate through Twitch device login and save `.undertow/tokens.json`.
-- `npm run login -- --account <login>` — add a plain team account for load testing.
-- `npm run probe -- --yes` — save a baseline, briefly set slow mode to 10
-  seconds, then restore and verify. Without `--yes`, prints the plan only.
-- `npm run watch -- --seconds 30` — listen to EventSub for 30 seconds by
-  default and print event types.
-- `npm run restore` — restore and verify saved chat settings.
-- `npm test` — run local tests.
+## Quick start without credentials
 
+After making a fresh copy of the repository, run the shipped synthetic storm
+with its local overlay:
 
-## Run the pace controller
+```sh
+npm run replay -- replays/gift-wave.jsonl --profile loadtest --overlay 0 --speed 20
+```
 
-`node src/cli.ts run` starts the controller in dry mode. It listens to EventSub,
-calculates chat pace, and writes JSON lines to `.undertow/storm.log.jsonl` without
-changing settings or replying. Add `--live` to apply the ladder and send threaded
-notices; live mode always saves and restores the channel baseline on exit. Pass
-`--verbose` to print raw EventSub notifications; connection and error events always
-remain visible. You can
-also pass `--dry` explicitly. `UNDERTOW_STATE_DIR` selects another directory for
-tokens, baseline, and logs, which is useful for isolated runs.
+This replay is a simulation with no Twitch connection. Its response model is a
+synthetic assumption, so every before-and-after pace produced by the model is
+labeled “modeled”. The overlay URL is printed when the local server starts.
 
-Choose `real` (default) or `loadtest` with `--profile real` / `--profile loadtest`,
-or set `UNDERTOW_PROFILE`. `undertow.config.json` defines both profiles. The
-ladder steps are slow mode at 3, 10, and 30 seconds, followers-only for 10 minutes,
-then emote-only. The controller moves one step at a time after sustained high pace;
-it releases one step at a time after pace stays below the release threshold.
+## Run scripts
 
-| Profile | Setpoint | Window | Dwell | Release hold |
-| --- | ---: | ---: | ---: | ---: |
-| real | 6 msgs/s | 10 s | 20 s | 30 s |
-| loadtest | 2 msgs/s | 10 s | 15 s | 30 s |
+The repository has no `run` script. Start the run loop with
+`node --env-file-if-exists=.env src/cli.ts run`; dry mode is the default.
 
-The loadtest dwell is deliberately 15 s: on camera a step every 8 s looks like
-panic.
+| Command | What it does |
+| --- | --- |
+| `npm run login` | Sign in to the broadcaster account with a device code. |
+| `npm run probe` | Print the safe probe plan; add `-- --yes` to briefly change and restore settings. |
+| `npm run watch` | Print EventSub event types; add `-- --seconds N` to set its duration. |
+| `node --env-file-if-exists=.env src/cli.ts run --dry` | Run without setting changes or replies; add `--profile real` or `--profile loadtest`, `--verbose`, `--overlay [port]`, or `--record <file>`. |
+| `node --env-file-if-exists=.env src/cli.ts run --live` | Apply settings and send threaded replies; the same `--profile`, `--verbose`, `--overlay`, and `--record` flags are available. |
+| `npm run loadtest` | Show the load-test plan; add `-- --dry` to preview or `-- --rate`, `-- --burst`, `-- --taper`, and `-- --accounts` to set its inputs. |
+| `npm run replay` | Replay a scenario; pass a file, `--profile`, `--runs`, `--model`, `--overlay`, `--speed`, or `--tail`. |
+| `npm run report` | Create or view a post-storm report; add `-- --profile`, `-- --scenario`, `-- --saved`, or `-- --accept`. |
 
-A gift or raid temporarily lowers the effective setpoint. If a channel settings
-update does not match Undertow's last patch, Undertow restores its baseline and
-yields to the streamer for the configured manual override hold.
+`UNDERTOW_STATE_DIR` selects the directory for tokens, baselines, storm logs,
+and other state files. `UNDERTOW_CONFIG_PATH` selects a config file for report
+review and acceptance. The `--profile` flag selects `real` or `loadtest`; the
+default is `real`. `--verbose` shows raw EventSub notifications. `--record`
+stores replayable events with chat text replaced by its character count. Replay
+is instant without an overlay; with an overlay, use `--speed N` to pace it or
+`--speed max` for instant playback. `--runs N` repeats an unpaced replay and
+checks that the decisions match.
+Run `npm run restore` to reapply the saved baseline. For a 30-second event
+window, use `npm run watch -- --seconds 30`.
 
-## Replay a storm
+## Environment
 
-`npm run replay -- replays/gift-wave.jsonl --profile loadtest --runs 3` runs the
-recording through Undertow's controller and run loop using an in-memory channel
-and simulated clock. Replay needs no `.env`, token, or network connection. It prints
-an honesty banner, decisions, summary metrics, and whether repeated runs matched.
-`--runs N` repeats from a fresh simulated channel; `--tail N` changes the default
-90 second release tail. The shipped storm is synthetic; see `replays/README.md`.
-Synthetic files use `--model on` by default; pass `--model off` for an open-loop
-replay. Recorded real files default to `--model off` and remain open loop. Modeled
-paces are labeled `modeled` and the banner names the synthetic assumption file;
-unmodified input rates are labeled `recorded`. The model exists to test controller
-behavior, not to estimate real impact. The only impact number shown in the demo
-comes from the live load test.
-The last run's decisions are written to `.undertow/replay.last.jsonl`, or to the
-folder set by `UNDERTOW_STATE_DIR`.
+Copy `.env.example` to `.env` and fill its values locally. `.env` is ignored and
+never committed.
 
-Add `--record path.jsonl` to `run` to record the four supported EventSub event
-types for later replay. Recorded files have `synthetic:false`. Chat display text
-is replaced with its character count; event ids, notice types, and required
-payload fields remain available to reproduce controller behavior.
+| Variable | Purpose |
+| --- | --- |
+| `TWITCH_CLIENT_ID` | Identifies the Twitch application. |
+| `TWITCH_CHANNEL_LOGIN` | Names the broadcaster channel Undertow may control. |
+| `TWITCH_CLIENT_SECRET` | Used only when refreshing tokens for a confidential application. |
 
-## Needle overlay for OBS
+## Limits
 
-The overlay is a local browser source, served only on `127.0.0.1`. Start a dry
-controller with `node src/cli.ts run --overlay 8787`, or use `--overlay` alone to
-select port 8787. Open `http://127.0.0.1:8787/` as an OBS Browser Source and set
-its width to 560 and height to 300. Add `?scale=1.5` to enlarge the card. The
-server closes with the run loop.
+| Area | Limit | What the code does |
+| --- | --- | --- |
+| Twitch chat | 20 messages per 30 seconds per plain user. | The load test caps attempts at 18 per rolling 30 seconds and rejects rates above 0.6 per second. |
+| Helix | 800 points per minute per client. | This budget is not hard-coded; the wrapper reads `Ratelimit-*`, waits for a 429 reset, then retries once. |
+| EventSub | Cost 0 for `channel.chat.message`, `channel.chat.notification`, `channel.chat_settings.update`, and `channel.raid`. | The client subscribes to these four version 1 events. It does not hard-code subscription costs. |
+| User token | About 3.6 hours. | The token response supplies its lifetime. At startup, a validation 401 triggers one refresh using the confidential app secret, if configured. |
+| Chat settings and replies | Slow mode 3 to 120 seconds; followers-only 0 to 129600 minutes; chat message at most 500 characters. | The actuator validates both bounds and the sender rejects longer messages. |
 
-For replay, use `npm run replay -- replays/gift-wave.jsonl --profile loadtest
---overlay 8787 --speed 20`. With an overlay, replay defaults to real time at
-`--speed 1`; `--speed 20` runs twenty times faster and `--speed max` is instant.
-Without an overlay, replay defaults to instant speed. Overlay replay supports one
-run only because each paced run needs its own open browser connection.
+## What is the load test
 
-The overlay labels live run pace as measured. Replay's dashed `SIMULATION` card
-shows the prominent simulation badge; when response modeling is on, its pace is
-labeled `modeled` and is a synthetic assumption, not a measurement. The only
-impact number shown in the demo comes from the live load test; modeled numbers are
-for testing controller behavior. A grey card and `reconnecting` reason indicate a
-lost local connection.
-During accelerated replay, the gift/raid chip stays visible for at least the
-profile's `warning_hold_s` in wall time, even when simulated time runs faster.
+The planned test uses up to eight labeled plain accounts owned by the team on
+the team's test channel. The broadcaster is always `TWITCH_CHANNEL_LOGIN`;
+account files for that broadcaster are refused. The command uses whichever
+account files exist, and each sends neutral scripted lines with the visible
+`[load test] ` prefix. The `loadtest` profile has a scaled setpoint of 2 messages
+per second instead of 6.
 
-## Labeled load test
+Create one account file per sender: sign in to that account, run
+`npm run login -- --account <login>`, and enter the code at `twitch.tv/activate`.
+Each sender is a plain team account with `user:write:chat` permission and no
+moderator role. `--rate` sets messages per second per account up to 0.6;
+`--burst` sets the full-rate duration; `--taper` sets the linear fade duration.
+An internal rolling limiter permits at most 18 sends per account in 30 seconds.
+The overlay badge reads `load test, N accounts` while the test is active.
 
-Create one account file per plain Twitch account owned by the team. Sign in to
-that account in a browser, run `npm run login -- --account <login>`, then enter
-the device code at `twitch.tv/activate`. Each account needs only
-`user:write:chat`; it should be a plain account with no moderator role. The
-broadcaster account is refused as a sender.
+The summary reports attempted, accepted, and dropped sends and observed accepted
+rates. Its before-and-after pace is a scaled test result, not a claim about real
+channels. A real-channel run measures chat and never prints a modeled number.
+Start the controller with
+`node --env-file-if-exists=.env src/cli.ts run --live --profile loadtest`, then
+run `npm run loadtest -- --rate 0.5 --burst 90 --taper 30`. The test writes
+`.undertow/loadtest.state.json` and
+`.undertow/loadtest.log.jsonl`.
 
-Run the controller separately with `node src/cli.ts run --live --profile loadtest`.
-Then run `npm run loadtest -- --rate 0.5 --burst 90 --taper 30`. The load test
-always targets `TWITCH_CHANNEL_LOGIN`, caps each account at 0.6 messages per
-second and at 18 attempts per rolling 30 seconds, and prefixes every scripted
-line with `[load test] `. The committed neutral lines are in
-`loadtest/lines.txt`. Start with `--dry` to print the account and rate plan
-without sending messages. Account count comes from the account files present.
+## The post-storm report
 
-The summary reports accepted and dropped messages and observed rates from the
-actual send responses. It does not estimate impact. Load test state and
-message records are written to `.undertow/loadtest.state.json` and
-`.undertow/loadtest.log.jsonl`; the run loop uses the active state for the
-overlay badge. Account tokens are stored separately in `.undertow/accounts/`.
+`npm run report` gives Codex a copy of the storm log and profile settings in an
+isolated scratch directory. Codex proposes thresholds; the replay simulator
+scores the proposal; config changes only with `--accept` after a passing score
+and a matching log. If Codex is unavailable, the last saved report is the
+fallback. Reading labels (`recorded` or `modeled`) come from the storm log.
+`--saved` skips Codex and scores the last saved report. `UNDERTOW_CONFIG_PATH`
+can point acceptance at a scratch config. Proposal output does not change the
+config by itself.
+For example, `npm run report -- --profile loadtest --scenario replays/gift-wave.jsonl`
+selects the profile and scenario.
 
-## Post-storm report
+## Built with Codex
 
-After a run, `npm run report` gives Codex only a copied storm log and a small
-profile context in a fresh temporary directory. The call uses a read-only
-sandbox and a 90-second limit. While it runs, elapsed time is shown. Codex
-returns a proposal card; it never edits the config. The replay simulator scores
-the current and proposed thresholds against the same scenario, and prints each
-criterion as PASS or FAIL. Rates from synthetic scenarios are labeled `modeled`;
-recorded scenarios are labeled `recorded`.
+Codex wrote all code in this repository; the human directed the work, reviewed
+each change, ran it against Twitch, and committed. The whole build continued in
+the single Codex thread `01a17fa0-44a2-7081-b2bc-68084379eebb`. The working
+rules are in `AGENTS.md`; build evidence and the commit list are in
+`docs/BUILD_EVIDENCE.md`.
 
-Use `npm run report -- --profile loadtest --scenario replays/gift-wave.jsonl`
-to select a profile and scenario. `--saved` skips Codex and scores the last real
-report from `.undertow/report.last.json` (Plan B for a stormy night). If Codex
-cannot run, Undertow shows that saved report with its timestamp; without one it
-exits with an error. `--accept` applies only a proposal that scores PASS and
-whose saved storm-log hash still matches the current log. The three-value diff
-is printed before the config is updated. The scratch directory is removed after
-the Codex call, including on timeout and error.
-Set `UNDERTOW_CONFIG_PATH` to use a scratch or alternate config file for review
-and acceptance. The default is the repository's `undertow.config.json`.
+## Layout and tests
+
+- `src/auth`, `src/eventsub`, `src/actuator`: sign-in, event listening, and
+  Twitch chat settings.
+- `src/controller`, `src/run.ts`, `src/chat`: pace decisions, the run loop, and
+  threaded replies.
+- `src/sim`, `replays`: labeled replay simulation and synthetic storm data.
+- `src/overlay`: local display server and page.
+- `src/loadtest`, `loadtest`: account sender and neutral message lines.
+- `src/report`, `docs`: proposal scoring and build evidence.
+- `test`: automated tests with local fakes.
+
+Run `npm test` for the test suite and `npm run check` for source style checks.
