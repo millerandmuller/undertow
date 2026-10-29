@@ -77,6 +77,8 @@ test('gauge geometry draws the dome and shares its arc with the needle and tick'
   assert.doesNotMatch(css, /\.reason\s*\{[^}]*position:\s*absolute/s);
   assert.doesNotMatch(css, /position:\s*absolute/);
   assert.match(css, /\.card\s*\{[^}]*width: 520px/s);
+  assert.match(css, /\.warning\s*\{[^}]*font-size:\s*16px/s);
+  assert.match(css, /transform: scale\(var\(--scale\)\)/);
   assert.match(css, /transform: scale\(var\(--scale\)\)/);
   assert.match(css, /width: calc\(560px \* var\(--scale\)\)/);
   assert.match(js, /params\.get\('scale'\)/);

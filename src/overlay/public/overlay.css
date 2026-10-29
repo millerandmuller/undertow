@@ -104,6 +104,7 @@ body {
   color: #ffdfae;
   background: rgba(171, 99, 22, 0.35);
   border: 1px solid rgba(255, 190, 104, 0.48);
+  font-size: 16px;
   text-transform: lowercase;
 }
 
