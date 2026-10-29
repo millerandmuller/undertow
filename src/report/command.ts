@@ -20,7 +20,12 @@ export type SavedReport = {
   storm_hash: string;
   profile: string;
   codex_thread_id: string | null;
+  pace_label?: PaceLabel;
+  step_labels?: PaceLabel[];
 };
+
+type PaceLabel = 'recorded' | 'modeled' | 'mixed' | 'unknown';
+type PaceLogEntry = { t?: string; action?: string; pace_source: 'recorded' | 'modeled' };
 
 export type ReportCommandDependencies = {
   stateDirectory?: string;
@@ -61,7 +66,8 @@ export async function reportCommand(
     ? dependencies.configPath
     : dependencies.configPath
     ? fileURLToPath(dependencies.configPath)
-    : fileURLToPath(new URL('../../undertow.config.json', import.meta.url));
+    : process.env.UNDERTOW_CONFIG_PATH ??
+      fileURLToPath(new URL('../../undertow.config.json', import.meta.url));
   const savedPath = join(stateDirectory, 'report.last.json');
   const stormPath = join(stateDirectory, 'storm.log.jsonl');
   const savedOnly = args.includes('--saved');
@@ -73,6 +79,7 @@ export async function reportCommand(
     process.env.UNDERTOW_PROFILE ?? 'real';
   const profile = await loadConfig(profileName, configPath);
   await readStormHash(stormPath, !savedOnly);
+  const paceLabels = savedOnly ? null : await readPaceLabels(stormPath);
   const scenario = option(args, '--scenario') ?? 'replays/gift-wave.jsonl';
   let report: SavedReport;
   let sourceLabel = 'Codex report';
@@ -96,9 +103,15 @@ export async function reportCommand(
     if (requested.usedSaved) sourceLabel = `saved report (${report.timestamp})`;
   }
 
+  const labels = report.pace_label
+    ? { overall: report.pace_label, steps: report.step_labels ?? [] }
+    : paceLabels ?? { overall: 'unknown' as const, steps: [] };
+
   output(sourceLabel);
-  output('storm readings: recorded');
-  printCard(report.card, profile, output);
+  output(labels.overall === 'unknown'
+    ? 'labels: unknown'
+    : `storm readings: ${labels.overall}`);
+  printCard(report.card, profile, labels, output);
   const rejection = proposalRejection(report.card, profile);
   if (rejection) {
     output(`REJECTED: ${rejection}`);
@@ -138,6 +151,10 @@ async function requestOrFallback(options: {
   output: (line: string) => void;
 }): Promise<{ report: SavedReport; usedSaved: boolean }> {
   try {
+    const labels = await readPaceLabels(join(
+      options.stateDirectory,
+      'storm.log.jsonl',
+    ));
     const generated = await generateReport({
       stateDirectory: options.stateDirectory,
       profileName: options.profileName,
@@ -152,6 +169,8 @@ async function requestOrFallback(options: {
       storm_hash: generated.stormHash,
       profile: options.profileName,
       codex_thread_id: generated.codexThreadId,
+      pace_label: labels.overall,
+      step_labels: labels.steps,
     };
     await atomicJson(options.savedPath, saved);
     return { report: saved, usedSaved: false };
@@ -165,7 +184,7 @@ async function requestOrFallback(options: {
 export async function readSavedReport(path: string): Promise<SavedReport | null> {
   try {
     const raw = await readJson<Record<string, unknown>>(path);
-    if (!isObject(raw) || Object.keys(raw).length !== 5 ||
+    if (!isObject(raw) || ![5, 7].includes(Object.keys(raw).length) ||
       typeof raw.timestamp !== 'string' || typeof raw.storm_hash !== 'string' ||
       typeof raw.profile !== 'string' ||
       (raw.codex_thread_id !== null && typeof raw.codex_thread_id !== 'string')) {
@@ -177,6 +196,10 @@ export async function readSavedReport(path: string): Promise<SavedReport | null>
       storm_hash: raw.storm_hash,
       profile: raw.profile,
       codex_thread_id: raw.codex_thread_id,
+      ...(isPaceLabel(raw.pace_label) ? { pace_label: raw.pace_label } : {}),
+      ...(Array.isArray(raw.step_labels) && raw.step_labels.every(isPaceLabel)
+        ? { step_labels: raw.step_labels }
+        : {}),
     };
   } catch {
     return null;
@@ -205,18 +228,53 @@ export async function readStormHash(
   }
 }
 
+export async function readPaceLabels(path: string): Promise<{
+  overall: PaceLabel;
+  steps: PaceLabel[];
+}> {
+  const text = await readFile(path, 'utf8');
+  const entries = text.split(/\r?\n/).filter((line) => line.trim());
+  if (entries.length === 0) throw new Error('Storm log is empty');
+  const parsed = entries.map((line, index) => parsePaceLogEntry(line, index + 1));
+  const labels = parsed.map((entry) => entry.pace_source);
+  const unique = [...new Set(labels)];
+  const overall = unique.length === 1 ? unique[0] as PaceLabel : 'mixed';
+  const stepEntries = parsed.filter((entry) =>
+    typeof entry.action === 'string' && /step_up|step_down|restore/.test(entry.action));
+  return { overall, steps: stepEntries.map((entry) => entry.pace_source) };
+}
+
+function parsePaceLogEntry(line: string, lineNumber: number): PaceLogEntry {
+  let value: unknown;
+  try {
+    value = JSON.parse(line) as unknown;
+  } catch {
+    throw new Error(`Storm log line ${lineNumber} is invalid JSON`);
+  }
+  if (!isObject(value) || (value.pace_source !== 'recorded' &&
+    value.pace_source !== 'modeled')) {
+    throw new Error(`Storm log line ${lineNumber} has missing or unknown pace_source`);
+  }
+  return value as PaceLogEntry;
+}
+
 function printCard(
   card: ReportCard,
   profile: ProfileConfig,
+  labels: { overall: PaceLabel; steps: PaceLabel[] },
   output: (line: string) => void,
 ): void {
   output(`cause: ${card.cause}`);
   output('steps:');
-  for (const step of card.steps) {
-    output(`  ${step.t} | ${step.action} | ${step.reading} (recorded)`);
+  for (const [index, step] of card.steps.entries()) {
+    const label = labels.steps[index] ?? labels.overall;
+    const reading = step.reading.replace(/\s*\((?:recorded|modeled)\)/gi, '');
+    const suffix = label === 'unknown' ? '' : ` (${label})`;
+    output(`  ${step.t} | ${step.action} | ${reading}${suffix}`);
   }
-  output(`setpoint: ${profile.setpoint_msgs_per_s} msgs/s (configured) -> ` +
-    `${card.proposed.setpoint} msgs/s (proposed)`);
+  const paceTag = labels.overall === 'unknown' ? 'labels unknown' : labels.overall;
+  output(`setpoint: ${profile.setpoint_msgs_per_s} msgs/s (configured, ${paceTag}) -> ` +
+    `${card.proposed.setpoint} msgs/s (proposed, ${paceTag})`);
   output(`dwell_s: ${profile.dwell_s} -> ${card.proposed.dwell_s}`);
   output(`release_hold_s: ${profile.release_hold_s} -> ` +
     `${card.proposed.release_hold_s}`);
@@ -266,4 +324,9 @@ function option(args: string[], name: string): string | undefined {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isPaceLabel(value: unknown): value is PaceLabel {
+  return value === 'recorded' || value === 'modeled' || value === 'mixed' ||
+    value === 'unknown';
 }

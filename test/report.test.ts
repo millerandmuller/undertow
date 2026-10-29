@@ -335,7 +335,7 @@ test('report config stays byte-identical without accept and after refusals', asy
       output: () => undefined,
     }), /failed scoring/);
     assert.equal(await readFile(fixture.configPath, 'utf8'), original);
-    await writeFile(fixture.stormPath, 'changed\n');
+    await writeFile(fixture.stormPath, decisionLine('modeled', 'changed'));
     await assert.rejects(reportCommand([...baseArgs, '--accept'], {
       stateDirectory: fixture.stateDirectory,
       configPath: fixture.configPath,
@@ -416,7 +416,7 @@ test('report fallback uses saved card and fails clearly without one', async () =
     assert.ok(output.some((line) => line.includes('peak pace 2.0 msgs/s (modeled)')));
     const emptyDirectory = join(fixture.directory, 'empty-state');
     await mkdir(emptyDirectory);
-    await writeFile(join(emptyDirectory, 'storm.log.jsonl'), 'storm\n');
+    await writeFile(join(emptyDirectory, 'storm.log.jsonl'), decisionLine());
     await assert.rejects(reportCommand(['--profile', 'loadtest'], {
       stateDirectory: emptyDirectory,
       configPath: fixture.configPath,
@@ -455,6 +455,129 @@ test('recorded report rates stay labeled recorded', async () => {
     assert.ok(rateLines.every((line) => line.includes('(recorded)')));
     assert.ok(rateLines.every((line) => !line.includes('(modeled)')));
     assert.ok(output.includes('VERDICT: PASS (recorded scores)'));
+    assert.ok(output.includes('labels: unknown'));
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test('modeled storm log never prints recorded labels', async () => {
+  const fixture = await commandFixture();
+  await writeFile(fixture.stormPath, decisionLine('modeled'));
+  const output: string[] = [];
+  try {
+    await reportCommand(['--profile', 'loadtest'], {
+      stateDirectory: fixture.stateDirectory,
+      configPath: fixture.configPath,
+      processRunner: reportRunner(card),
+      scorer: async () => passingScore(),
+      output: (line) => output.push(line),
+    });
+    assert.ok(output.includes('storm readings: modeled'));
+    assert.equal(output.join('\n').includes('recorded'), false);
+    assert.ok(output.some((line) => line.includes('configured, modeled')));
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test('recorded storm log never prints modeled labels', async () => {
+  const fixture = await commandFixture();
+  const scenario = join(fixture.directory, 'recorded-scenario.jsonl');
+  await makeRecordedScenario(scenario);
+  const output: string[] = [];
+  try {
+    await reportCommand(['--profile', 'loadtest', '--scenario', scenario], {
+      stateDirectory: fixture.stateDirectory,
+      configPath: fixture.configPath,
+      processRunner: reportRunner(card),
+      scorer: async () => ({ ...passingScore(), paceSource: 'recorded' }),
+      output: (line) => output.push(line),
+    });
+    assert.ok(output.includes('storm readings: recorded'));
+    assert.equal(output.join('\n').includes('modeled'), false);
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test('report rejects a pace label missing from a storm log line', async () => {
+  const fixture = await commandFixture();
+  await writeFile(fixture.stormPath, '{"action":"step_up"}\n');
+  try {
+    await assert.rejects(reportCommand(['--profile', 'loadtest'], {
+      stateDirectory: fixture.stateDirectory,
+      configPath: fixture.configPath,
+      processRunner: reportRunner(card),
+      output: () => undefined,
+    }), /line 1.*missing or unknown pace_source/);
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test('mixed report labels follow each step log line and ignore Codex labels', async () => {
+  const fixture = await commandFixture();
+  await writeFile(fixture.stormPath,
+    `${decisionLine('recorded', 'step_up')}${decisionLine('modeled', 'step_down')}`);
+  const output: string[] = [];
+  const mixedCard = {
+    ...card,
+    steps: [
+      { t: 'up', action: 'step_up', reading: 'pace 3/s (modeled)' },
+      { t: 'down', action: 'step_down', reading: 'pace 1/s (recorded)' },
+    ],
+  };
+  try {
+    await reportCommand(['--profile', 'loadtest'], {
+      stateDirectory: fixture.stateDirectory,
+      configPath: fixture.configPath,
+      processRunner: reportRunner(mixedCard),
+      scorer: async () => passingScore(),
+      output: (line) => output.push(line),
+    });
+    assert.ok(output.includes('storm readings: mixed'));
+    assert.ok(output.includes('  up | step_up | pace 3/s (recorded)'));
+    assert.ok(output.includes('  down | step_down | pace 1/s (modeled)'));
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test('report accept applies a passing Codex proposal only to the scratch config', async () => {
+  const fixture = await commandFixture();
+  const repositoryConfig = await readFile('undertow.config.json', 'utf8');
+  const original = await readFile(fixture.configPath, 'utf8');
+  const output: string[] = [];
+  const proposal = {
+    ...card,
+    proposed: { setpoint: 1.5, dwell_s: 20, release_hold_s: 40 },
+  };
+  try {
+    await reportCommand([
+      '--accept', '--profile', 'loadtest', '--scenario',
+      'replays/gift-wave.jsonl',
+    ], {
+      stateDirectory: fixture.stateDirectory,
+      configPath: fixture.configPath,
+      processRunner: reportRunner(proposal),
+      scorer: async () => passingScore(),
+      output: (line) => output.push(line),
+    });
+    const after = await readFile(fixture.configPath, 'utf8');
+    const beforeConfig = JSON.parse(original) as Record<string, Record<string, unknown>>;
+    const afterConfig = JSON.parse(after) as Record<string, Record<string, unknown>>;
+    assert.deepEqual(afterConfig.real, beforeConfig.real);
+    assert.deepEqual(afterConfig.loadtest, {
+      ...beforeConfig.loadtest,
+      setpoint_msgs_per_s: 1.5,
+      dwell_s: 20,
+      release_hold_s: 40,
+    });
+    assert.ok(output.includes('  setpoint_msgs_per_s: 2 -> 1.5'));
+    assert.ok(output.includes('  dwell_s: 15 -> 20'));
+    assert.ok(output.includes('  release_hold_s: 30 -> 40'));
+    assert.equal(await readFile('undertow.config.json', 'utf8'), repositoryConfig);
   } finally {
     await rm(fixture.directory, { recursive: true, force: true });
   }
@@ -497,7 +620,7 @@ function fakeProcess(writeOutput: () => Promise<void>) {
 async function stateDirectory(): Promise<string> {
   const directory = await temporaryDirectory();
   await mkdir(join(directory, 'state'));
-  await writeFile(join(directory, 'state', 'storm.log.jsonl'), 'storm\n');
+  await writeFile(join(directory, 'state', 'storm.log.jsonl'), decisionLine());
   return join(directory, 'state');
 }
 
@@ -511,7 +634,7 @@ async function commandFixture(): Promise<{
   const directory = await temporaryDirectory();
   const stateDirectory = join(directory, 'state');
   await mkdir(stateDirectory);
-  await writeFile(join(stateDirectory, 'storm.log.jsonl'), 'storm log fixture\n');
+  await writeFile(join(stateDirectory, 'storm.log.jsonl'), decisionLine());
   const configPath = join(directory, 'undertow.config.json');
   await copyFile('undertow.config.json', configPath);
   return {
@@ -521,6 +644,38 @@ async function commandFixture(): Promise<{
     stormPath: join(stateDirectory, 'storm.log.jsonl'),
     reportPath: join(stateDirectory, 'report.last.json'),
   };
+}
+
+function decisionLine(
+  paceSource: 'recorded' | 'modeled' = 'recorded',
+  reason = 'fixture',
+): string {
+  return `${JSON.stringify({
+    t: '2026-10-28T12:00:00.000Z',
+    pace: 2,
+    pace_source: paceSource,
+    action: reason,
+    reason,
+  })}\n`;
+}
+
+function reportRunner(reportCard: ReportCard): CodexProcessRunner {
+  return (_command, _args, options) => ({
+    completion: writeFile(
+      join(options.cwd, 'last-message.json'),
+      JSON.stringify(reportCard),
+    ).then(() => 0),
+    kill: () => undefined,
+  });
+}
+
+async function makeRecordedScenario(path: string): Promise<void> {
+  const source = await readFile('replays/gift-wave.jsonl', 'utf8');
+  const rows = source.trim().split('\n');
+  const header = JSON.parse(rows[0] ?? '{}') as Record<string, unknown>;
+  header.synthetic = false;
+  rows[0] = JSON.stringify(header);
+  await writeFile(path, `${rows.join('\n')}\n`);
 }
 
 async function saveReport(path: string, reportCard: ReportCard, hash: string) {

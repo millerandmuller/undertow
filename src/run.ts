@@ -124,6 +124,7 @@ export type RunHandle = {
 export type RunLog = {
   t: string;
   pace: number;
+  pace_source: 'recorded';
   setpoint: number;
   step: number;
   action: string;
@@ -570,6 +571,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     await writeLog(logPath, {
       t: new Date(nowMs).toISOString(),
       pace,
+      pace_source: 'recorded',
       setpoint,
       step: controller.step,
       action: options.dryRun ? `dry_${decision.action.type}` : decision.action.type,

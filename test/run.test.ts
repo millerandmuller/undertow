@@ -192,6 +192,7 @@ test('dry run writes decision records without changing settings', async () => {
       .trim()
       .split('\n');
     assert.equal(JSON.parse(lines[0]).action, 'dry_none');
+    assert.equal(JSON.parse(lines[0]).pace_source, 'recorded');
     assert.equal(methods.some((method) => method.startsWith('PATCH ')), false);
   } finally {
     await rm(directory, { recursive: true, force: true });
