@@ -8,6 +8,7 @@ import { Helix } from './util/helix.ts';
 import { atomicJson, readJson } from './util/files.ts';
 import { startOverlayServer } from './overlay/server.ts';
 import { readdir, readFile } from 'node:fs/promises';
+import { access } from 'node:fs/promises';
 import { loadAccounts } from './loadtest/accounts.ts';
 import { runLoadtest } from './loadtest/runner.ts';
 import { parseLoadtestRate } from './loadtest/scheduler.ts';
@@ -106,6 +107,13 @@ async function probe(): Promise<void> {
     );
     return;
   }
+  try {
+    await access(baselineFile);
+    console.warn('WARNING: existing baseline was preserved; restore it before probing.');
+    return;
+  } catch {
+    // A missing baseline is the normal probe path.
+  }
   const { helix, api } = await context();
   const restored = await probeWithRestore(
     api,
@@ -119,12 +127,21 @@ async function probe(): Promise<void> {
 
 async function run(): Promise<void> {
   const port = requestedOverlayPort(process.argv.slice(3));
-  const { helix, identity } = await context();
-  const profile = await loadConfig(selectedProfile(process.argv.slice(3)));
   const live = process.argv.includes('--live');
   if (live && process.argv.includes('--dry')) {
     throw new Error('Choose either --dry or --live');
   }
+  if (live) {
+    try {
+      await access(baselineFile);
+      throw new Error('unrestored previous run: run npm run restore first');
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('unrestored')) throw error;
+    }
+  }
+  const runArgs = process.argv.slice(3);
+  const profile = await loadConfig(selectedProfile(runArgs));
+  const { helix, identity } = await context();
   const handle = await startRun({
     helix,
     broadcasterId: identity.user_id,
@@ -149,6 +166,7 @@ async function run(): Promise<void> {
   }
   await handle.done;
   await stopRun?.();
+  if (handle.exitCode !== 0) process.exitCode = handle.exitCode;
 }
 
 function requestedOverlayPort(args: string[]): number | null {

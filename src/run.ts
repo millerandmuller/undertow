@@ -1,8 +1,7 @@
-import { access, appendFile, mkdir, writeFile } from 'node:fs/promises';
+import { access, appendFile, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   chatSettings,
-  restoreBaseline,
   saveBaseline,
   type ChatSettings,
   type ChatSettingsPatch,
@@ -114,12 +113,15 @@ export type RunOptions = {
   verbose?: boolean;
   clock?: RunClock;
   recordPath?: string;
+  delay?: (milliseconds: number) => Promise<void>;
+  mode?: 'real' | 'simulation';
 };
 
 export type RunHandle = {
   display: DisplayState;
   done: Promise<void>;
   stop(): Promise<void>;
+  readonly exitCode: number;
 };
 export type RunLog = {
   t: string;
@@ -141,7 +143,12 @@ const PATCH_KEYS: (keyof ChatSettings)[] = [
 function eventPatch(event: ChatSettingsNotification): ChatSettingsPatch {
   const patch: ChatSettingsPatch = {};
   for (const key of PATCH_KEYS) {
-    const value = event[key];
+    const alias = key === 'slow_mode_wait_time'
+      ? event.slow_mode_wait_time_seconds
+      : key === 'follower_mode_duration'
+      ? event.follower_mode_duration_minutes
+      : undefined;
+    const value = alias ?? event[key];
     if (value !== undefined) Object.assign(patch, { [key]: value });
   }
   return patch;
@@ -150,23 +157,6 @@ function eventPatch(event: ChatSettingsNotification): ChatSettingsPatch {
 function matchesExpected(patch: ChatSettingsPatch, expected: ChatSettings): boolean {
   const keys = Object.keys(patch) as (keyof ChatSettings)[];
   return keys.length > 0 && keys.every((key) => patch[key] === expected[key]);
-}
-
-function restoreSnapshot(
-  current: ChatSettings,
-  baseline: ChatSettings,
-): ChatSettings {
-  const next = {
-    ...current,
-    slow_mode: baseline.slow_mode,
-    follower_mode: baseline.follower_mode,
-    emote_mode: baseline.emote_mode,
-  };
-  if (baseline.slow_mode) next.slow_mode_wait_time = baseline.slow_mode_wait_time;
-  if (baseline.follower_mode) {
-    next.follower_mode_duration = baseline.follower_mode_duration;
-  }
-  return next;
 }
 
 function patchSnapshot(current: ChatSettings, patch: ChatSettingsPatch): ChatSettings {
@@ -301,7 +291,8 @@ function activeSetpoint(
 }
 
 function isLoginFailure(message: string): boolean {
-  return message.includes('401') || message.includes('Token refresh failed');
+  return /^Helix request failed \(401\):/.test(message) ||
+    /^Token refresh failed \(401\)$/.test(message);
 }
 
 export async function startRun(options: RunOptions): Promise<RunHandle> {
@@ -311,7 +302,16 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
   const baselinePath = join(options.stateDirectory, 'baseline.json');
   const logPath = join(options.stateDirectory, 'storm.log.jsonl');
   let recordQueue = Promise.resolve();
+  let eventQueue = Promise.resolve();
   let baseline: ChatSettings;
+  if (!options.dryRun && options.mode !== 'simulation') {
+    try {
+      await access(baselinePath);
+      throw new Error('unrestored previous run: run npm run restore first');
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('unrestored')) throw error;
+    }
+  }
   try {
     await access(baselinePath);
     baseline = await readJson<ChatSettings>(baselinePath);
@@ -320,6 +320,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     await saveBaseline(baselinePath, baseline);
   }
   let expected = await settingsApi.get();
+  const controllerOwned = new Set<keyof ChatSettings>();
   const runStartedAt = clock.now();
   if (options.recordPath) {
     await mkdir(dirname(options.recordPath), { recursive: true, mode: 0o700 });
@@ -344,6 +345,10 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
   let lastReplyParentId: string | null = null;
   let stopped = false;
   let paused = false;
+  let authRetryAtMs = 0;
+  let exitCode = 0;
+  const delay = options.delay ?? ((milliseconds) =>
+    new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   let retryAfterMs = 0;
   let cancelTicks: (() => void) | undefined;
   let tickInFlight: Promise<void> | null = null;
@@ -361,17 +366,83 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
 
   const restore = async (): Promise<void> => {
     if (options.dryRun) return;
-    expected = restoreSnapshot(expected, baseline);
-    expected = await restoreBaseline(settingsApi, baselinePath);
+    let failure: unknown;
+    for (const waitMs of [0, 1000, 2000, 4000]) {
+      if (waitMs > 0) await delay(waitMs);
+      try {
+        await restoreOwnedSettings();
+        await unlink(baselinePath).catch(() => undefined);
+        return;
+      } catch (error) {
+        failure = error;
+      }
+    }
+    exitCode = 1;
+    logger('RESTORE FAILED: run npm run restore now');
+    throw failure instanceof Error ? failure : new Error('Restore failed');
+  };
+
+  const restoreOwnedSettings = async (): Promise<void> => {
+    const actual = await settingsApi.get();
+    const patch: ChatSettingsPatch = {};
+    const owns = (key: keyof ChatSettings): boolean => controllerOwned.has(key) &&
+      actual[key] === expected[key];
+    const slowOwned = controllerOwned.has('slow_mode') ||
+      controllerOwned.has('slow_mode_wait_time');
+    const slowChangedByHand = (controllerOwned.has('slow_mode') &&
+      actual.slow_mode !== expected.slow_mode) ||
+      (controllerOwned.has('slow_mode_wait_time') &&
+      actual.slow_mode_wait_time !== expected.slow_mode_wait_time);
+    if (slowOwned && !slowChangedByHand) {
+        patch.slow_mode = baseline.slow_mode;
+      if (baseline.slow_mode && controllerOwned.has('slow_mode_wait_time')) {
+        patch.slow_mode_wait_time = baseline.slow_mode_wait_time;
+      }
+    }
+    const followersOwned = controllerOwned.has('follower_mode') ||
+      controllerOwned.has('follower_mode_duration');
+    const followersChangedByHand = (controllerOwned.has('follower_mode') &&
+      actual.follower_mode !== expected.follower_mode) ||
+      (controllerOwned.has('follower_mode_duration') &&
+      actual.follower_mode_duration !== expected.follower_mode_duration);
+    if (followersOwned && !followersChangedByHand) {
+      patch.follower_mode = baseline.follower_mode;
+      if (baseline.follower_mode && controllerOwned.has('follower_mode_duration')) {
+        patch.follower_mode_duration = baseline.follower_mode_duration;
+      }
+    }
+    if (owns('emote_mode')) patch.emote_mode = baseline.emote_mode;
+    const previousExpected = expected;
+    expected = patchSnapshot(expected, patch);
+    try {
+      if (Object.keys(patch).length > 0) await settingsApi.update(patch);
+    } catch (error) {
+      expected = previousExpected;
+      throw error;
+    }
+    const verified = await settingsApi.get();
+    for (const key of Object.keys(patch) as (keyof ChatSettings)[]) {
+      if (verified[key] !== patch[key]) throw new Error(`Restore verification failed for ${key}`);
+    }
+    controllerOwned.clear();
+    expected = verified;
   };
 
   const eventSub = new EventSub(
     options.helix,
     options.broadcasterId,
-    (event) => { void processEvent(event); },
+    (event) => {
+      eventQueue = eventQueue.then(() => processEvent(event));
+    },
     options.socketConstructor ?? WebSocket,
     (entry) => {
       if (!isRawEvent(entry) || options.verbose) logger(entry);
+    },
+    {
+      onFatal: () => {
+        exitCode = 1;
+        void stop();
+      },
     },
   );
 
@@ -384,6 +455,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     stopOperation = (async () => {
       try {
         if (tickInFlight) await tickInFlight.catch(() => undefined);
+        await eventQueue.catch(() => undefined);
         await recordQueue.catch(() => undefined);
         await restore();
       } catch (error) {
@@ -419,8 +491,36 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     const nowMs = clock.now();
     overrideUntilMs = nowMs + options.profile.override_hold_s * 1000;
     controller = { ...initialControllerState(), lastMoveMs: nowMs };
+    for (const key of Object.keys(patch) as (keyof ChatSettings)[]) {
+      const value = patch[key];
+      if (value !== undefined) {
+        Object.assign(expected, { [key]: value });
+        Object.assign(baseline, { [key]: value });
+      }
+      controllerOwned.delete(key);
+      if (key === 'slow_mode' || key === 'slow_mode_wait_time') {
+        controllerOwned.delete('slow_mode');
+        controllerOwned.delete('slow_mode_wait_time');
+      }
+      if (key === 'follower_mode' || key === 'follower_mode_duration') {
+        controllerOwned.delete('follower_mode');
+        controllerOwned.delete('follower_mode_duration');
+      }
+    }
+    await saveBaseline(baselinePath, baseline);
     logger({ type: 'manual_settings_change', override_until_ms: overrideUntilMs });
-    await restore();
+  }
+
+  async function pauseForLogin(): Promise<void> {
+    paused = true;
+    authRetryAtMs = clock.now() + 60_000;
+    logger({ type: 'login_needed' });
+    try {
+      await restore();
+      controller = { ...initialControllerState(), lastMoveMs: clock.now() };
+    } catch {
+      // The restore path already logged the required loud failure.
+    }
   }
 
   async function processEvent(event: UndertowEvent): Promise<void> {
@@ -463,11 +563,11 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     } catch (error) {
       const message = errorMessage(error);
       if (isLoginFailure(message)) {
-        paused = true;
-        logger({ type: 'login_needed' });
+        await pauseForLogin();
       } else {
+        exitCode = 1;
         logger({ type: 'event_error', message });
-        await stop();
+        void stop();
       }
     }
   }
@@ -491,18 +591,24 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
   async function apply(action: ControllerAction): Promise<void> {
     if (options.dryRun || action.type === 'none' || action.type === 'yield') return;
     if (action.type === 'restore') {
-      expected = restoreSnapshot(expected, baseline);
-      expected = await restoreBaseline(settingsApi, baselinePath);
+      await restore();
       return;
     }
     const patch = actionPatch(action, options.profile, controller.step);
     if (!patch) return;
+    if (controllerOwned.size === 0) await saveBaseline(baselinePath, baseline);
     const previousExpected = expected;
+    const previousOwned = new Set(controllerOwned);
     expected = patchSnapshot(expected, patch);
+    for (const key of Object.keys(patch) as (keyof ChatSettings)[]) {
+      controllerOwned.add(key);
+    }
     try {
       await settingsApi.update(patch);
     } catch (error) {
       expected = previousExpected;
+      controllerOwned.clear();
+      for (const key of previousOwned) controllerOwned.add(key);
       throw error;
     }
   }
@@ -511,6 +617,17 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     if (stopped) return;
     const nowMs = clock.now();
     const pace = rate(paceState, nowMs);
+    if (paused && nowMs >= authRetryAtMs) {
+      try {
+        await settingsApi.get();
+        paused = false;
+        authRetryAtMs = 0;
+        logger({ type: 'login_resumed' });
+      } catch (error) {
+        if (isLoginFailure(errorMessage(error))) authRetryAtMs = nowMs + 60_000;
+        else throw error;
+      }
+    }
     const decision = paused
       ? { state: controller, action: { type: 'yield' as const } }
       : nowMs < retryAfterMs
@@ -541,9 +658,8 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
           } catch (error) {
             const message = errorMessage(error);
             if (isLoginFailure(message)) {
-              paused = true;
+              await pauseForLogin();
               reason = 'login needed';
-              logger({ type: 'login_needed' });
             } else {
               reason = `settings changed; reply failed: ${message}`;
               logger({ type: 'reply_failed', message });
@@ -553,9 +669,8 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       } catch (error) {
         const message = errorMessage(error);
         if (isLoginFailure(message)) {
-          paused = true;
+          await pauseForLogin();
           reason = 'login needed';
-          logger({ type: 'login_needed' });
         } else {
           retryAfterMs = nowMs + options.profile.dwell_s * 1000;
           reason = `setting change failed: ${message}`;
@@ -616,6 +731,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     try {
       await tickInFlight;
     } catch (error) {
+      exitCode = 1;
       logger({ type: 'fatal_run_error', message: errorMessage(error) });
       await stop();
     } finally {
@@ -626,5 +742,6 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     display,
     done,
     stop,
+    get exitCode() { return exitCode; },
   };
 }

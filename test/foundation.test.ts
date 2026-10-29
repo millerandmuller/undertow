@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -418,6 +418,47 @@ test('EventSub keeps old connection when reconnect socket fails to welcome', asy
   client.close();
 });
 
+test('EventSub retries fresh reconnect with backoff and reports exhaustion', async () => {
+  FakeSocket.reset();
+  let nowMs = 0;
+  let fatal = false;
+  let attempts = 0;
+  const logs: unknown[] = [];
+  class FailingReconnectSocket extends FakeSocket {
+    constructor(url: string) {
+      if (url === 'wss://eventsub.wss.twitch.tv/ws' && FakeSocket.instances.length > 0) {
+        attempts += 1;
+        throw new Error('socket unavailable');
+      }
+      super(url);
+    }
+  }
+  const client = new EventSub(
+    { request: async () => undefined } as Helix,
+    '42',
+    () => undefined,
+    FailingReconnectSocket,
+    (entry) => logs.push(entry),
+    {
+      keepaliveMarginMs: 0,
+      sleep: async (milliseconds) => { nowMs += milliseconds; },
+      now: () => nowMs,
+      onFatal: () => { fatal = true; },
+    },
+  );
+  const connected = client.connect();
+  FakeSocket.instances[0].sendMessage({
+    metadata: { message_type: 'session_welcome' },
+    payload: { session: { id: 'initial', keepalive_timeout_seconds: 0 } },
+  });
+  await connected;
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.ok(attempts >= 20);
+  assert.equal(fatal, true);
+  assert.ok(logs.includes('EVENTSUB RECONNECT FAILED: run Undertow again'));
+  client.close();
+});
+
 test('baseline is saved before a change and later restore recovers a crash', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'undertow-baseline-'));
   const baselinePath = join(directory, 'baseline.json');
@@ -435,7 +476,7 @@ test('baseline is saved before a change and later restore recovers a crash', asy
     assert.equal(current.slow_mode, baselineSettings.slow_mode);
     assert.equal(current.follower_mode, baselineSettings.follower_mode);
     assert.equal(current.emote_mode, baselineSettings.emote_mode);
-    assert.deepEqual(JSON.parse(await readFile(baselinePath, 'utf8')), baselineSettings);
+    await assert.rejects(readFile(baselinePath, 'utf8'));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -462,6 +503,30 @@ test('probe restores the baseline when the change call fails part-way', async ()
     assert.equal(current.slow_mode, baselineSettings.slow_mode);
     assert.equal(current.follower_mode, baselineSettings.follower_mode);
     assert.equal(current.emote_mode, baselineSettings.emote_mode);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('probe refuses to overwrite a saved baseline', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'undertow-existing-probe-'));
+  const baselinePath = join(directory, 'baseline.json');
+  const content = JSON.stringify({ ...baselineSettings, slow_mode_wait_time: 17 });
+  await writeFile(baselinePath, content);
+  let requests = 0;
+  const api = {
+    get: async () => { requests += 1; return { ...baselineSettings }; },
+    update: async () => { requests += 1; },
+  };
+  try {
+    await assert.rejects(probeWithRestore(
+      api,
+      baselinePath,
+      async () => { requests += 1; },
+      async () => undefined,
+    ), /Baseline already exists/);
+    assert.equal(await readFile(baselinePath, 'utf8'), content);
+    assert.equal(requests, 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

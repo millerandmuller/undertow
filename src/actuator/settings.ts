@@ -1,4 +1,5 @@
 import { atomicJson, readJson } from '../util/files.ts';
+import { access, unlink } from 'node:fs/promises';
 import type { Helix } from '../util/helix.ts';
 
 export type ChatSettings = {
@@ -97,6 +98,7 @@ export async function restoreBaseline(
       throw new Error(`Restore verification failed for ${key}`);
     }
   }
+  await unlink(path);
   return actual;
 }
 
@@ -106,6 +108,14 @@ export async function probeWithRestore(
   change: () => Promise<void>,
   onChanged: () => Promise<void>,
 ): Promise<ChatSettings> {
+  try {
+    await access(path);
+    throw new Error('Baseline already exists; restore it before probing');
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Baseline already exists')) {
+      throw error;
+    }
+  }
   const baseline = await api.get();
   await saveBaseline(path, baseline);
   try {

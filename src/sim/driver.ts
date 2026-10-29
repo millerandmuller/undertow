@@ -73,6 +73,7 @@ export async function runReplay(
     profile,
     stateDirectory,
     dryRun: false,
+    mode: 'simulation',
     socketConstructor: SimulatedSocketConstructor,
     clock,
     log: () => undefined,

@@ -14,8 +14,10 @@ export type ChatNotification = {
 export type ChatSettingsNotification = {
   broadcaster_user_id: string;
   slow_mode?: boolean;
+  slow_mode_wait_time_seconds?: number;
   slow_mode_wait_time?: number;
   follower_mode?: boolean;
+  follower_mode_duration_minutes?: number;
   follower_mode_duration?: number;
   emote_mode?: boolean;
   subscriber_mode?: boolean;
@@ -104,6 +106,9 @@ const KEEPALIVE_MARGIN_MS = 2_000;
 export type EventSubOptions = {
   welcomeDeadlineMs?: number;
   keepaliveMarginMs?: number;
+  sleep?: (milliseconds: number) => Promise<void>;
+  now?: () => number;
+  onFatal?: (error: Error) => void;
 };
 
 export class EventSub {
@@ -119,6 +124,9 @@ export class EventSub {
   private closing = false;
   private welcomeDeadlineMs: number;
   private keepaliveMarginMs: number;
+  private sleep: (milliseconds: number) => Promise<void>;
+  private now: () => number;
+  private onFatal?: (error: Error) => void;
 
   constructor(
     helix: Helix,
@@ -135,6 +143,9 @@ export class EventSub {
     this.log = log;
     this.welcomeDeadlineMs = options.welcomeDeadlineMs ?? WELCOME_DEADLINE_MS;
     this.keepaliveMarginMs = options.keepaliveMarginMs ?? KEEPALIVE_MARGIN_MS;
+    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.now = options.now ?? Date.now;
+    this.onFatal = options.onFatal;
   }
 
   async connect(url = 'wss://eventsub.wss.twitch.tv/ws'): Promise<void> {
@@ -289,10 +300,25 @@ export class EventSub {
 
   private async reconnectFresh(): Promise<void> {
     this.log({ type: 'reconnect', mode: 'fresh' });
-    try {
-      this.active = await this.openSocket('wss://eventsub.wss.twitch.tv/ws', 'subscribe');
-    } catch (error) {
-      this.log({ type: 'reconnect_failed', message: (error as Error).message });
+    const started = this.now();
+    const backoffs = [1000, 2000, 4000, 8000];
+    let attempt = 0;
+    let lastError = new Error('EventSub reconnect failed');
+    while (!this.closing && this.now() - started < 300_000) {
+      try {
+        this.active = await this.openSocket('wss://eventsub.wss.twitch.tv/ws', 'subscribe');
+        return;
+      } catch (error) {
+        lastError = error instanceof Error ? error : lastError;
+        this.log({ type: 'reconnect_failed', message: lastError.message });
+      }
+      const waitMs = backoffs[attempt] ?? 15_000;
+      attempt += 1;
+      await this.sleep(Math.min(waitMs, Math.max(0, 300_000 - (this.now() - started))));
+    }
+    if (!this.closing) {
+      this.log('EVENTSUB RECONNECT FAILED: run Undertow again');
+      this.onFatal?.(lastError);
     }
   }
 

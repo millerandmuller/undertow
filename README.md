@@ -31,9 +31,13 @@ without skipping.
 Each change replies to the latest message from someone else, or is unthreaded
 when the latest message was Undertow's own reply. For example: “Slow mode 10 s:
 chat hit 14 msgs/s. Back to normal when
-it drops under 3 msgs/s for 30 s.” The streamer's own manual change always wins:
-Undertow yields for the override hold. It saves the baseline before changing
-settings and restores that baseline on exit.
+it drops under 3 msgs/s for 30 s.” The streamer's own manual change always
+wins: Undertow yields without undoing the change and leaves that setting alone
+on exit. It saves the baseline before changing settings and restores only
+settings it still owns. If restore fails after retries, it prints
+`RESTORE FAILED: run npm run restore now` and exits with an error. A live start
+with a saved baseline prints
+`unrestored previous run: run npm run restore first` and exits.
 
 ## Quick start without credentials
 
