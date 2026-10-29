@@ -82,7 +82,7 @@ select port 8787. Open `http://127.0.0.1:8787/` as an OBS Browser Source and set
 its width to 560 and height to 300. Add `?scale=1.5` to enlarge the card. The
 server closes with the run loop.
 
-For replay, use `node src/cli.ts replay replays/gift-wave.jsonl --profile loadtest
+For replay, use `npm run replay -- replays/gift-wave.jsonl --profile loadtest
 --overlay 8787 --speed 20`. With an overlay, replay defaults to real time at
 `--speed 1`; `--speed 20` runs twenty times faster and `--speed max` is instant.
 Without an overlay, replay defaults to instant speed. Overlay replay supports one
@@ -137,3 +137,5 @@ exits with an error. `--accept` applies only a proposal that scores PASS and
 whose saved storm-log hash still matches the current log. The three-value diff
 is printed before the config is updated. The scratch directory is removed after
 the Codex call, including on timeout and error.
+Set `UNDERTOW_CONFIG_PATH` to use a scratch or alternate config file for review
+and acceptance. The default is the repository's `undertow.config.json`.
