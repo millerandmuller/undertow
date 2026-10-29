@@ -81,6 +81,7 @@ test('profile flag overrides profile environment variable', () => {
   const previous = process.env.UNDERTOW_PROFILE;
   process.env.UNDERTOW_PROFILE = 'loadtest';
   assert.equal(selectedProfile(['--profile', 'real']), 'real');
+  assert.throws(() => selectedProfile(['--profile', 'nope']), /Invalid --profile flag/);
   assert.equal(selectedProfile([]), 'loadtest');
   if (previous === undefined) delete process.env.UNDERTOW_PROFILE;
   else process.env.UNDERTOW_PROFILE = previous;
@@ -95,8 +96,10 @@ test('notice strings are plain sentences within chat limit', () => {
   const easingFollowers = stepDownNotice(profile.ladder[3], 4, 3.1, profile);
   assert.equal(step.message, 'Slow mode 10 s: chat hit 14 msgs/s. Back to normal when it drops ' +
     'under 3 msgs/s for 30 s.');
-  assert.match(gift.message, /a gift wave is landing/);
-  assert.match(raid.message, /a raid is landing/);
+  assert.match(gift.message, /A gift wave is landing\. Watching closely/);
+  assert.match(raid.message, /A raid is landing\. Watching closely/);
+  assert.doesNotMatch(gift.message, /Followers-only/);
+  assert.doesNotMatch(raid.message, /Followers-only/);
   assert.equal(restore.message, 'Chat is back to normal. Settings restored.');
   assert.equal(
     easingSlow.message,

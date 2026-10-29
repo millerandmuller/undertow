@@ -41,10 +41,10 @@ export function warningNotice(
   stepNumber: number,
   config: ProfileConfig,
 ): Notice {
-  const arrival = reason === 'raid' ? 'a raid is landing' : 'a gift wave is landing';
+  const arrival = reason === 'raid' ? 'A raid is landing.' : 'A gift wave is landing.';
   return bounded({
     kind: 'warning',
-    message: `Followers-only 10 min for a moment: ${arrival}. Releasing as soon as it settles.`,
+    message: `${arrival} Watching closely: chat limits tighten sooner if the pace keeps climbing.`,
     overlayText: `pace ${pace}/s, setpoint ${config.setpoint_msgs_per_s}/s, ` +
       `step ${stepNumber} of ${config.ladder.length}`,
   });
