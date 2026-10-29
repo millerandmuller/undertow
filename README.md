@@ -139,6 +139,9 @@ run `npm run loadtest -- --rate 0.5 --burst 90 --taper 30`. The test writes
 
 ## The post-storm report
 
+Restarting during a storm archives the earlier log; report reads the current
+one, and archived logs can be copied back to `storm.log.jsonl` if needed.
+
 `npm run report` gives Codex a copy of the storm log and profile settings in an
 isolated scratch directory. Codex proposes thresholds; the replay simulator
 scores the proposal; config changes only with `--accept` after a passing score
