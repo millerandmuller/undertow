@@ -10,17 +10,20 @@ holds each rung for at least 20 seconds. It steps down one rung after pace stays
 below 3 messages per second for 30 seconds. Between 3 and 6 messages per second,
 hysteresis keeps the current setting in place.
 
-1. Slow mode 3 s limits chatter frequency; it steps up after pace exceeds 6 for
-   20 seconds while the current rung has held 20 seconds, and steps down after
-   pace stays below 3 for 30 seconds, while pace between 3 and 6 holds steady.
-2. Slow mode 10 s tightens the per-chatter limit after the same high-pace dwell;
-   it eases down one rung after the same release hold, with the same hysteresis.
-3. Slow mode 30 s raises that limit one rung after the same high-pace dwell and
-   eases down one rung after the release hold, with the same hysteresis.
-4. Followers-only 10 min restricts chat to followers after the high-pace dwell;
-   it eases down one rung after the release hold, with the same hysteresis.
-5. Emote-only limits messages to emotes after the high-pace dwell and eases down
-   one rung after the release hold; the 3-to-6 range keeps the current setting.
+1. Slow mode 3 s lets each viewer post once every 3 seconds, a light first pause
+   when chat starts running faster than the setpoint.
+2. Slow mode 10 s lets each viewer post once every 10 seconds, giving chat more
+   space when the first pause has not brought the pace down.
+3. Slow mode 30 s lets each viewer post once every 30 seconds, slowing the flow
+   when the shorter pauses have not been enough.
+4. Followers-only 10 min lets only viewers who followed at least 10 minutes ago
+   post, limiting fresh follows when the three slow mode rungs have not helped.
+5. Emote-only allows messages made only of emotes, keeping chat to reactions
+   when followers-only has not brought the pace down.
+
+A step up needs pace above the setpoint for 20 s and the current rung held for
+20 s; a step down needs pace below half the setpoint for 30 s, one rung at a time
+without skipping.
 
 Each change posts one threaded reply that explains the setting and release
 condition. For example: “Slow mode 10 s: chat hit 14 msgs/s. Back to normal when
