@@ -73,7 +73,11 @@ The repository has no `run` script. Start the run loop with
 and other state files. `UNDERTOW_CONFIG_PATH` selects a config file for report
 review and acceptance. The `--profile` flag selects `real` or `loadtest`; the
 default is `real`. `--verbose` shows raw EventSub notifications. `--record`
-stores replayable events with chat text replaced by its character count. Replay
+stores replayable events with chat text replaced by its character count and
+marks recognized settings echoes with `own_echo: true` and manual updates
+with `own_echo: false`. Replay skips recognized echoes. Older unmarked settings updates wait up to three simulated seconds to
+match a controller change; unmatched updates play as manual changes after that
+window. Replay
 is instant without an overlay; with an overlay, use `--speed N` to pace it or
 `--speed max` for instant playback. `--runs N` repeats an unpaced replay and
 checks that the decisions match.

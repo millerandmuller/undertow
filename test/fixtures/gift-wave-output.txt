@@ -1,0 +1,18 @@
+SIMULATION (replay of replays/gift-wave.jsonl, no Twitch connection)
+RESPONSE MODEL: synthetic assumption, not measured (replays/response-model.json)
+46s pace 6.1/s (modeled), setpoint 1.5/s (configured), step 1, step_up: Slow mode 3 s: chat hit 6.1 msgs/s (modeled). Back to normal when it drops under 0.75 msgs/s (configured) for 30 s.
+61s pace 5.1/s (modeled), setpoint 1.5/s (configured), step 2, step_up: Slow mode 10 s: chat hit 5.1 msgs/s (modeled). Back to normal when it drops under 0.75 msgs/s (configured) for 30 s.
+76s pace 3.9/s (modeled), setpoint 1.5/s (configured), step 3, step_up: Slow mode 30 s: chat hit 3.9 msgs/s (modeled). Back to normal when it drops under 0.75 msgs/s (configured) for 30 s.
+91s pace 2.3/s (modeled), setpoint 1.5/s (configured), step 4, step_up: Followers-only 10 min: chat hit 2.3 msgs/s (modeled). Back to normal when it drops under 0.75 msgs/s (configured) for 30 s.
+134s pace 0.0/s (modeled), setpoint 1.5/s (configured), step 3, step_down: Easing to slow mode 30 s. Next step down in 15 s if chat stays under 0.75 msgs/s (configured).
+149s pace 0.1/s (modeled), setpoint 1.5/s (configured), step 2, step_down: Easing to slow mode 10 s. Next step down in 15 s if chat stays under 0.75 msgs/s (configured).
+164s pace 0.4/s (modeled), setpoint 1.5/s (configured), step 1, step_down: Easing to slow mode 3 s. Back to normal in 15 s if chat stays under 0.75 msgs/s (configured).
+179s pace 0.1/s (modeled), setpoint 1.5/s (configured), step 0, restore: Chat is back to normal. Settings restored.
+summary modeled peak pace 6.1 msgs/s (modeled); recorded peak pace 6.1 msgs/s (recorded)
+modeled pace before the first step-up 6.1 msgs/s (modeled)
+modeled pace after the last step-up 1.2 msgs/s (modeled)
+recorded pace before the first step-up 6.1 msgs/s (recorded)
+recorded pace after the last step-up 3.9 msgs/s (recorded)
+steps taken 4; time to restore after final step-up 88 s
+final settings equal baseline: yes
+deterministic: 1 of 1 runs identical

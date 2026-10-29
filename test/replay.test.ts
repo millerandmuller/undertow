@@ -324,6 +324,9 @@ test('replay output labels modeled and recorded rates and needs no credentials',
       encoding: 'utf8',
     });
     assert.equal(result.status, 0, result.stderr);
+    const golden = await readFile(new URL('./fixtures/gift-wave-output.txt', import.meta.url),
+      'utf8');
+    assert.equal(result.stdout, golden);
     assert.ok(result.stdout.startsWith(
       'SIMULATION (replay of replays/gift-wave.jsonl, no Twitch connection)',
     ));
