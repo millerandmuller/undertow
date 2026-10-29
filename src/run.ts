@@ -623,9 +623,9 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
         paused = false;
         authRetryAtMs = 0;
         logger({ type: 'login_resumed' });
-      } catch (error) {
-        if (isLoginFailure(errorMessage(error))) authRetryAtMs = nowMs + 60_000;
-        else throw error;
+      } catch {
+        authRetryAtMs = nowMs + 60_000;
+        logger({ type: 'login_retry_failed' });
       }
     }
     const decision = paused
