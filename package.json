@@ -9,6 +9,7 @@
     "probe": "node --env-file-if-exists=.env src/cli.ts probe",
     "watch": "node --env-file-if-exists=.env src/cli.ts watch",
     "restore": "node --env-file-if-exists=.env src/cli.ts restore",
+    "loadtest": "node --env-file-if-exists=.env src/cli.ts loadtest",
     "replay": "node src/cli.ts replay",
     "check": "node scripts/check.mjs"
   }

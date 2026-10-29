@@ -1,4 +1,5 @@
 import { deviceLogin, validateStoredToken, type Tokens } from './auth/auth.ts';
+import { loginAccount } from './auth/accounts.ts';
 import { chatSettings, probeWithRestore, restoreBaseline } from './actuator/settings.ts';
 import { EventSub } from './eventsub/client.ts';
 import { loadConfig, selectedProfile } from './config.ts';
@@ -6,6 +7,10 @@ import { startRun } from './run.ts';
 import { Helix } from './util/helix.ts';
 import { atomicJson, readJson } from './util/files.ts';
 import { startOverlayServer } from './overlay/server.ts';
+import { readdir, readFile } from 'node:fs/promises';
+import { loadAccounts } from './loadtest/accounts.ts';
+import { runLoadtest } from './loadtest/runner.ts';
+import { parseLoadtestRate } from './loadtest/scheduler.ts';
 
 function stateDirectory(): string {
   return process.env.UNDERTOW_STATE_DIR ?? '.undertow';
@@ -18,6 +23,7 @@ function statePath(name: string): string {
 const baselineFile = statePath('baseline.json');
 let eventSub: EventSub | undefined;
 let stopRun: (() => Promise<void>) | undefined;
+let loadtestAbort: AbortController | undefined;
 
 function config(): { clientId: string; login: string } {
   const clientId = process.env.TWITCH_CLIENT_ID;
@@ -66,6 +72,18 @@ function printJson(value: unknown): void {
 
 async function login(): Promise<void> {
   const { clientId, login: expectedLogin } = config();
+  const account = optionValue(process.argv.slice(3), '--account');
+  if (account) {
+    const tokens = await loginAccount({
+      clientId,
+      broadcasterLogin: expectedLogin,
+      accountLogin: account,
+      stateDirectory: stateDirectory(),
+      device: { onCode: (code, uri) => console.log(`Open ${uri} and enter code ${code}`) },
+    });
+    console.log(`Validated ${tokens.login}; scopes: ${tokens.scope.join(', ')}`);
+    return;
+  }
   const tokens = await deviceLogin(
     clientId,
     expectedLogin,
@@ -73,6 +91,11 @@ async function login(): Promise<void> {
     { onCode: (code, uri) => console.log(`Open ${uri} and enter code ${code}`) },
   );
   console.log(`Validated ${tokens.login}; scopes: ${tokens.scope.join(', ')}`);
+}
+
+function optionValue(args: string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] : undefined;
 }
 
 async function probe(): Promise<void> {
@@ -164,7 +187,112 @@ async function watch(): Promise<void> {
   }, seconds * 1000).unref();
 }
 
+async function loadtest(args: string[]): Promise<void> {
+  const rate = Number(optionValue(args, '--rate') ?? '0.5');
+  const burst = Number(optionValue(args, '--burst') ?? '90');
+  const taper = Number(optionValue(args, '--taper') ?? '30');
+  const plan = parseLoadtestRate(rate, burst, taper);
+  const directory = statePath('accounts');
+  const names = await accountNames(directory);
+  if (names.length === 0) {
+    throw new Error(`No account files exist in ${directory}`);
+  }
+  const requestedText = optionValue(args, '--accounts');
+  const requested = requestedText?.split(',').map((item) => item.trim()).filter(Boolean);
+  const selected = requested ?? names;
+  if (requested && requested.some((name) =>
+    !names.some((candidate) => candidate.toLowerCase() === name.toLowerCase())
+  )) {
+    throw new Error('One or more requested account files were not found');
+  }
+  const channelValue = process.env.TWITCH_CHANNEL_LOGIN ?? '';
+  if (selected.some((name) => name.toLowerCase() === channelValue.toLowerCase())) {
+    throw new Error('The broadcaster cannot be used as a load-test account');
+  }
+  const lines = await loadLines();
+  const { login: channelLogin, clientId } = config();
+  if (args.includes('--dry')) {
+    printLoadtestPlan(
+      selected,
+      plan.rate,
+      plan.rate * selected.length,
+      plan.burstSeconds,
+      plan.taperSeconds,
+      channelLogin,
+      lines.length,
+    );
+    return;
+  }
+  const mainContext = await context();
+  const accounts = await loadAccounts({
+    directory,
+    clientId,
+    clientSecret: process.env.TWITCH_CLIENT_SECRET,
+    broadcasterLogin: channelLogin,
+    requestedLogins: requested,
+    onSkip: (name, reason) => console.log(`skipping ${name}: ${reason}`),
+  });
+  printLoadtestPlan(
+    accounts.map((account) => account.login),
+    plan.rate,
+    plan.rate * accounts.length,
+    plan.burstSeconds,
+    plan.taperSeconds,
+    channelLogin,
+    lines.length,
+  );
+  loadtestAbort = new AbortController();
+  try {
+    await runLoadtest({
+      accounts,
+      broadcasterId: mainContext.identity.user_id,
+      channelLogin,
+      stateDirectory: stateDirectory(),
+      lines,
+      rate: plan,
+      signal: loadtestAbort.signal,
+    });
+  } finally {
+    loadtestAbort = undefined;
+  }
+}
+
+async function accountNames(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
+  return entries.filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .map((entry) => entry.name.slice(0, -5)).sort();
+}
+
+async function loadLines(): Promise<string[]> {
+  const lines = (await readFile('loadtest/lines.txt', 'utf8'))
+    .split(/\r?\n/).filter(Boolean);
+  if (lines.length < 40 || lines.some((line) => line.length + 12 > 120)) {
+    throw new Error('loadtest/lines.txt needs 40 lines under 120 characters each');
+  }
+  return lines;
+}
+
+function printLoadtestPlan(
+  accounts: string[],
+  rate: number,
+  totalRate: number,
+  burst: number,
+  taper: number,
+  channel: string,
+  lineCount: number,
+): void {
+  console.log('LOAD TEST PLAN');
+  console.log(`accounts: ${accounts.join(', ')}`);
+  console.log(`rate per account: ${rate}/s; total planned rate: ${totalRate}/s`);
+  console.log(`burst: ${burst}s; taper: ${taper}s; channel: ${channel}`);
+  console.log(`scripted lines: ${lineCount}; prefix: [load test]`);
+}
+
 process.once('SIGINT', () => {
+  if (loadtestAbort) {
+    loadtestAbort.abort();
+    return;
+  }
   void (async () => {
     await stopRun?.();
     eventSub?.close();
@@ -172,6 +300,10 @@ process.once('SIGINT', () => {
   })();
 });
 process.once('SIGTERM', () => {
+  if (loadtestAbort) {
+    loadtestAbort.abort();
+    return;
+  }
   void (async () => {
     await stopRun?.();
     eventSub?.close();
@@ -190,8 +322,11 @@ try {
     const { replayCommand } = await import('./sim/command.ts');
     await replayCommand(process.argv.slice(3));
   }
+  else if (command === 'loadtest') await loadtest(process.argv.slice(3));
   else {
-    throw new Error('Usage: node src/cli.ts <login|probe|watch|restore|run|replay>');
+    throw new Error(
+      'Usage: node src/cli.ts <login|probe|watch|restore|run|replay|loadtest>',
+    );
   }
 } catch (error) {
   await stopRun?.();

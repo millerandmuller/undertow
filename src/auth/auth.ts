@@ -51,6 +51,7 @@ export type DeviceLoginOptions = {
   fetcher?: typeof fetch;
   sleep?: (milliseconds: number) => Promise<void>;
   onCode?: (code: string, uri: string) => void;
+  scopes?: string[];
 };
 
 function form(body: Record<string, string>): RequestInit {
@@ -66,6 +67,7 @@ export async function validateToken(
   _clientId: string,
   expectedLogin: string,
   fetcher: typeof fetch = fetch,
+  requiredScopes: string[] = REQUIRED_SCOPES,
 ): Promise<ValidateIdentity> {
   const response = await fetcher(VALIDATE_URL, {
     headers: { Authorization: `OAuth ${token}` },
@@ -79,7 +81,7 @@ export async function validateToken(
       `Authenticated login ${identity.login} does not match TWITCH_CHANNEL_LOGIN ${expectedLogin}`,
     );
   }
-  const missing = REQUIRED_SCOPES.filter((scope) => !identity.scopes.includes(scope));
+  const missing = requiredScopes.filter((scope) => !identity.scopes.includes(scope));
   if (missing.length > 0) {
     throw new Error(`Missing required Twitch scopes: ${missing.join(', ')}`);
   }
@@ -89,10 +91,11 @@ export async function validateToken(
 async function requestDeviceCode(
   clientId: string,
   fetcher: typeof fetch,
+  scopes: string[],
 ): Promise<DeviceResponse> {
   const response = await fetcher(DEVICE_URL, form({
     client_id: clientId,
-    scopes: REQUIRED_SCOPES.join(' '),
+    scopes: scopes.join(' '),
   }));
   if (!response.ok) {
     throw new Error(`Device authorization failed (${response.status})`);
@@ -104,12 +107,13 @@ async function pollToken(
   clientId: string,
   deviceCode: string,
   fetcher: typeof fetch,
+  scopes: string[],
 ): Promise<Response> {
   return fetcher(TOKEN_URL, form({
     client_id: clientId,
     device_code: deviceCode,
     grant_type: DEVICE_GRANT,
-    scopes: REQUIRED_SCOPES.join(' '),
+    scopes: scopes.join(' '),
   }));
 }
 
@@ -121,18 +125,25 @@ export async function deviceLogin(
 ): Promise<Tokens> {
   const fetcher = options.fetcher ?? fetch;
   const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const device = await requestDeviceCode(clientId, fetcher);
+  const scopes = options.scopes ?? REQUIRED_SCOPES;
+  const device = await requestDeviceCode(clientId, fetcher, scopes);
   options.onCode?.(device.user_code, device.verification_uri);
   const deadline = Date.now() + device.expires_in * 1000;
   let interval = device.interval * 1000;
 
   while (Date.now() < deadline) {
     await sleep(interval);
-    const response = await pollToken(clientId, device.device_code, fetcher);
+    const response = await pollToken(clientId, device.device_code, fetcher, scopes);
     const result = await response.json() as TokenResponse | { message?: string };
     if (response.ok) {
       const token = result as TokenResponse;
-      const identity = await validateToken(token.access_token, clientId, expectedLogin, fetcher);
+      const identity = await validateToken(
+        token.access_token,
+        clientId,
+        expectedLogin,
+        fetcher,
+        scopes,
+      );
       const tokens: Tokens = { ...token, ...identity };
       await save(tokens);
       return tokens;
@@ -157,6 +168,7 @@ export async function validateStoredToken(
   persist: (tokens: Tokens) => Promise<void>,
   fetcher: typeof fetch = fetch,
   clientSecret?: string,
+  requiredScopes: string[] = REQUIRED_SCOPES,
 ): Promise<{ tokens: Tokens; identity: ValidateIdentity }> {
   try {
     const identity = await validateToken(
@@ -164,6 +176,7 @@ export async function validateStoredToken(
       clientId,
       expectedLogin,
       fetcher,
+      requiredScopes,
     );
     return { tokens, identity };
   } catch (error) {
@@ -186,6 +199,7 @@ export async function validateStoredToken(
       clientId,
       expectedLogin,
       fetcher,
+      requiredScopes,
     );
     return { tokens: refreshed, identity };
   } catch (error) {

@@ -32,6 +32,7 @@ import {
   type UndertowEvent,
 } from './eventsub/client.ts';
 import { readJson } from './util/files.ts';
+import { readLoadtestBadge } from './loadtest/state.ts';
 import type { Helix } from './util/helix.ts';
 import type { ReplayEvent, ReplayHeader, ReplayType } from './sim/replay.ts';
 
@@ -543,6 +544,10 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       }
     }
     const setpoint = activeSetpoint(nowMs, warningAt, options.profile);
+    const badge = await readLoadtestBadge(
+      join(options.stateDirectory, 'loadtest.state.json'),
+      nowMs,
+    );
     const warningActive = warningAt !== null &&
       nowMs - warningAt <= options.profile.warning_hold_s * 1000;
     display.publish({
@@ -557,7 +562,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       ratelimitRemaining: rateLimitValue(options.helix.remaining),
       ratelimitLimit: rateLimitValue(options.helix.limit),
       paceSource: 'measured',
-      badge: null,
+      badge,
     });
     await writeLog(logPath, {
       t: new Date(nowMs).toISOString(),
