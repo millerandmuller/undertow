@@ -1,3 +1,5 @@
+import { REQUEST_TIMEOUT_MS, requestSignal } from '../util/http.ts';
+
 export const REQUIRED_SCOPES = [
   'user:read:chat',
   'user:write:chat',
@@ -52,13 +54,15 @@ export type DeviceLoginOptions = {
   sleep?: (milliseconds: number) => Promise<void>;
   onCode?: (code: string, uri: string) => void;
   scopes?: string[];
+  requestTimeoutMs?: number;
 };
 
-function form(body: Record<string, string>): RequestInit {
+function form(body: Record<string, string>, timeoutMs: number): RequestInit {
   return {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(body),
+    signal: requestSignal(timeoutMs),
   };
 }
 
@@ -68,9 +72,11 @@ export async function validateToken(
   expectedLogin: string,
   fetcher: typeof fetch = fetch,
   requiredScopes: string[] = REQUIRED_SCOPES,
+  requestTimeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<ValidateIdentity> {
   const response = await fetcher(VALIDATE_URL, {
     headers: { Authorization: `OAuth ${token}` },
+    signal: requestSignal(requestTimeoutMs),
   });
   if (!response.ok) throw new TokenValidationError(response.status);
 
@@ -92,11 +98,12 @@ async function requestDeviceCode(
   clientId: string,
   fetcher: typeof fetch,
   scopes: string[],
+  timeoutMs: number,
 ): Promise<DeviceResponse> {
   const response = await fetcher(DEVICE_URL, form({
     client_id: clientId,
     scopes: scopes.join(' '),
-  }));
+  }, timeoutMs));
   if (!response.ok) {
     throw new Error(`Device authorization failed (${response.status})`);
   }
@@ -108,13 +115,14 @@ async function pollToken(
   deviceCode: string,
   fetcher: typeof fetch,
   scopes: string[],
+  timeoutMs: number,
 ): Promise<Response> {
   return fetcher(TOKEN_URL, form({
     client_id: clientId,
     device_code: deviceCode,
     grant_type: DEVICE_GRANT,
     scopes: scopes.join(' '),
-  }));
+  }, timeoutMs));
 }
 
 export async function deviceLogin(
@@ -126,14 +134,15 @@ export async function deviceLogin(
   const fetcher = options.fetcher ?? fetch;
   const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const scopes = options.scopes ?? REQUIRED_SCOPES;
-  const device = await requestDeviceCode(clientId, fetcher, scopes);
+  const timeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+  const device = await requestDeviceCode(clientId, fetcher, scopes, timeoutMs);
   options.onCode?.(device.user_code, device.verification_uri);
   const deadline = Date.now() + device.expires_in * 1000;
   let interval = device.interval * 1000;
 
   while (Date.now() < deadline) {
     await sleep(interval);
-    const response = await pollToken(clientId, device.device_code, fetcher, scopes);
+    const response = await pollToken(clientId, device.device_code, fetcher, scopes, timeoutMs);
     const result = await response.json() as TokenResponse | { message?: string };
     if (response.ok) {
       const token = result as TokenResponse;
@@ -143,6 +152,7 @@ export async function deviceLogin(
         expectedLogin,
         fetcher,
         scopes,
+        timeoutMs,
       );
       const tokens: Tokens = { ...token, ...identity };
       await save(tokens);
@@ -169,6 +179,7 @@ export async function validateStoredToken(
   fetcher: typeof fetch = fetch,
   clientSecret?: string,
   requiredScopes: string[] = REQUIRED_SCOPES,
+  requestTimeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<{ tokens: Tokens; identity: ValidateIdentity }> {
   try {
     const identity = await validateToken(
@@ -177,6 +188,7 @@ export async function validateStoredToken(
       expectedLogin,
       fetcher,
       requiredScopes,
+      requestTimeoutMs,
     );
     return { tokens, identity };
   } catch (error) {
@@ -189,7 +201,9 @@ export async function validateStoredToken(
 
   let refreshed: Tokens;
   try {
-    refreshed = await refreshTokens(tokens, clientId, persist, fetcher, clientSecret);
+    refreshed = await refreshTokens(
+      tokens, clientId, persist, fetcher, clientSecret, requestTimeoutMs,
+    );
   } catch {
     throw new Error('Access token refresh failed; run npm run login');
   }
@@ -200,6 +214,7 @@ export async function validateStoredToken(
       expectedLogin,
       fetcher,
       requiredScopes,
+      requestTimeoutMs,
     );
     return { tokens: refreshed, identity };
   } catch (error) {
@@ -216,6 +231,7 @@ export async function refreshTokens(
   persist: (tokens: Tokens) => Promise<void>,
   fetcher: typeof fetch = fetch,
   clientSecret?: string,
+  requestTimeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<Tokens> {
   const body: Record<string, string> = {
     client_id: clientId,
@@ -223,7 +239,7 @@ export async function refreshTokens(
     refresh_token: tokens.refresh_token,
   };
   if (clientSecret) body.client_secret = clientSecret;
-  const response = await fetcher(TOKEN_URL, form(body));
+  const response = await fetcher(TOKEN_URL, form(body, requestTimeoutMs));
   if (!response.ok) throw new Error(`Token refresh failed (${response.status})`);
   const rotated = { ...tokens, ...await response.json() as TokenResponse };
   // Twitch invalidates the previous refresh token as soon as it rotates it.

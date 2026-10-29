@@ -31,6 +31,7 @@ import {
   type UndertowEvent,
 } from './eventsub/client.ts';
 import { readJson } from './util/files.ts';
+import { rotateStormLog } from './util/storm-log.ts';
 import { readLoadtestBadge } from './loadtest/state.ts';
 import type { Helix } from './util/helix.ts';
 import type { ReplayEvent, ReplayHeader, ReplayType } from './sim/replay.ts';
@@ -115,6 +116,7 @@ export type RunOptions = {
   recordPath?: string;
   delay?: (milliseconds: number) => Promise<void>;
   mode?: 'real' | 'simulation';
+  stopDrainTimeoutMs?: number;
 };
 
 export type RunHandle = {
@@ -290,9 +292,9 @@ function activeSetpoint(
     : profile.setpoint_msgs_per_s;
 }
 
-function isLoginFailure(message: string): boolean {
+export function isLoginFailure(message: string): boolean {
   return /^Helix request failed \(401\):/.test(message) ||
-    /^Token refresh failed \(401\)$/.test(message);
+    /^Token refresh failed \(40[01]\)$/.test(message);
 }
 
 export async function startRun(options: RunOptions): Promise<RunHandle> {
@@ -319,8 +321,11 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     baseline = await settingsApi.get();
     await saveBaseline(baselinePath, baseline);
   }
+  await rotateStormLog(logPath);
   let expected = await settingsApi.get();
+  let expectedHistory = [structuredClone(expected)];
   const controllerOwned = new Set<keyof ChatSettings>();
+  const manuallyChanged = new Set<keyof ChatSettings>();
   const runStartedAt = clock.now();
   if (options.recordPath) {
     await mkdir(dirname(options.recordPath), { recursive: true, mode: 0o700 });
@@ -389,7 +394,8 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       actual[key] === expected[key];
     const slowOwned = controllerOwned.has('slow_mode') ||
       controllerOwned.has('slow_mode_wait_time');
-    const slowChangedByHand = (controllerOwned.has('slow_mode') &&
+    const slowChangedByHand = manuallyChanged.has('slow_mode') ||
+      manuallyChanged.has('slow_mode_wait_time') || (controllerOwned.has('slow_mode') &&
       actual.slow_mode !== expected.slow_mode) ||
       (controllerOwned.has('slow_mode_wait_time') &&
       actual.slow_mode_wait_time !== expected.slow_mode_wait_time);
@@ -401,7 +407,8 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     }
     const followersOwned = controllerOwned.has('follower_mode') ||
       controllerOwned.has('follower_mode_duration');
-    const followersChangedByHand = (controllerOwned.has('follower_mode') &&
+    const followersChangedByHand = manuallyChanged.has('follower_mode') ||
+      manuallyChanged.has('follower_mode_duration') || (controllerOwned.has('follower_mode') &&
       actual.follower_mode !== expected.follower_mode) ||
       (controllerOwned.has('follower_mode_duration') &&
       actual.follower_mode_duration !== expected.follower_mode_duration);
@@ -413,11 +420,14 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     }
     if (owns('emote_mode')) patch.emote_mode = baseline.emote_mode;
     const previousExpected = expected;
+    const previousHistory = expectedHistory;
     expected = patchSnapshot(expected, patch);
+    rememberExpected(expected);
     try {
       if (Object.keys(patch).length > 0) await settingsApi.update(patch);
     } catch (error) {
       expected = previousExpected;
+      expectedHistory = previousHistory;
       throw error;
     }
     const verified = await settingsApi.get();
@@ -426,7 +436,12 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     }
     controllerOwned.clear();
     expected = verified;
+    rememberExpected(verified);
   };
+
+  function rememberExpected(settings: ChatSettings): void {
+    expectedHistory = [...expectedHistory, structuredClone(settings)].slice(-3);
+  }
 
   const eventSub = new EventSub(
     options.helix,
@@ -454,9 +469,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     eventSub.close();
     stopOperation = (async () => {
       try {
-        if (tickInFlight) await tickInFlight.catch(() => undefined);
-        await eventQueue.catch(() => undefined);
-        await recordQueue.catch(() => undefined);
+        await drainPendingWork();
         await restore();
       } catch (error) {
         logger({ type: 'restore_failed', message: errorMessage(error) });
@@ -466,6 +479,25 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     })();
     return stopOperation;
   };
+
+  async function drainPendingWork(): Promise<void> {
+    const pending = Promise.all([
+      tickInFlight?.catch(() => undefined),
+      eventQueue.catch(() => undefined),
+      recordQueue.catch(() => undefined),
+    ]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        pending,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, options.stopDrainTimeoutMs ?? 12_000);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
 
   async function sendNotice(notice: Notice | null): Promise<string | null> {
     if (!notice || options.dryRun || !lastMessageId) return null;
@@ -487,26 +519,24 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
 
   async function processManualSettings(event: ChatSettingsNotification): Promise<void> {
     const patch = eventPatch(event);
-    if (matchesExpected(patch, expected)) return;
+    const keys = Object.keys(patch) as (keyof ChatSettings)[];
+    if (keys.length === 0) return;
+    if (expectedHistory.some((snapshot) => matchesExpected(patch, snapshot))) return;
+    const changedKeys = keys.filter((key) => patch[key] !== expected[key]);
     const nowMs = clock.now();
     overrideUntilMs = nowMs + options.profile.override_hold_s * 1000;
     controller = { ...initialControllerState(), lastMoveMs: nowMs };
-    for (const key of Object.keys(patch) as (keyof ChatSettings)[]) {
+    for (const key of keys) {
       const value = patch[key];
-      if (value !== undefined) {
-        Object.assign(expected, { [key]: value });
-        Object.assign(baseline, { [key]: value });
-      }
-      controllerOwned.delete(key);
-      if (key === 'slow_mode' || key === 'slow_mode_wait_time') {
-        controllerOwned.delete('slow_mode');
-        controllerOwned.delete('slow_mode_wait_time');
-      }
-      if (key === 'follower_mode' || key === 'follower_mode_duration') {
-        controllerOwned.delete('follower_mode');
-        controllerOwned.delete('follower_mode_duration');
-      }
+      if (value !== undefined) Object.assign(expected, { [key]: value });
     }
+    for (const key of changedKeys) {
+      const value = patch[key];
+      if (value !== undefined) Object.assign(baseline, { [key]: value });
+      controllerOwned.delete(key);
+      manuallyChanged.add(key);
+    }
+    rememberExpected(expected);
     await saveBaseline(baselinePath, baseline);
     logger({ type: 'manual_settings_change', override_until_ms: overrideUntilMs });
   }
@@ -598,17 +628,24 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     if (!patch) return;
     if (controllerOwned.size === 0) await saveBaseline(baselinePath, baseline);
     const previousExpected = expected;
+    const previousHistory = expectedHistory;
     const previousOwned = new Set(controllerOwned);
+    const previousManual = new Set(manuallyChanged);
     expected = patchSnapshot(expected, patch);
+    rememberExpected(expected);
     for (const key of Object.keys(patch) as (keyof ChatSettings)[]) {
       controllerOwned.add(key);
+      manuallyChanged.delete(key);
     }
     try {
       await settingsApi.update(patch);
     } catch (error) {
       expected = previousExpected;
+      expectedHistory = previousHistory;
       controllerOwned.clear();
       for (const key of previousOwned) controllerOwned.add(key);
+      manuallyChanged.clear();
+      for (const key of previousManual) manuallyChanged.add(key);
       throw error;
     }
   }

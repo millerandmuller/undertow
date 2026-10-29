@@ -1,3 +1,4 @@
+import { REQUEST_TIMEOUT_MS, requestSignal } from './http.ts';
 import { refreshTokens, type Tokens } from '../auth/auth.ts';
 
 export type HelixError = {
@@ -10,6 +11,7 @@ type HelixOptions = {
   fetcher?: typeof fetch;
   sleep?: (milliseconds: number) => Promise<void>;
   clientSecret?: string;
+  requestTimeoutMs?: number;
 };
 
 export class Helix {
@@ -23,6 +25,8 @@ export class Helix {
   sleep: (milliseconds: number) => Promise<void>;
   clientSecret?: string;
 
+  requestTimeoutMs: number;
+
   constructor(
     clientId: string,
     tokens: Tokens,
@@ -35,6 +39,7 @@ export class Helix {
     this.fetcher = options.fetcher ?? fetch;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.clientSecret = options.clientSecret;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   }
 
   private async send(path: string, init: RequestInit): Promise<Response> {
@@ -42,7 +47,13 @@ export class Helix {
     headers.set('Authorization', `Bearer ${this.tokens.access_token}`);
     headers.set('Client-Id', this.clientId);
     if (init.body) headers.set('Content-Type', 'application/json');
-    return this.fetcher(`https://api.twitch.tv/helix/${path}`, { ...init, headers });
+    return this.fetcher(`https://api.twitch.tv/helix/${path}`, {
+      ...init,
+      headers,
+      signal: init.signal
+        ? AbortSignal.any([init.signal, requestSignal(this.requestTimeoutMs)])
+        : requestSignal(this.requestTimeoutMs),
+    });
   }
 
   private keepRateLimit(response: Response): void {
@@ -66,6 +77,7 @@ export class Helix {
         this.persist,
         this.fetcher,
         this.clientSecret,
+        this.requestTimeoutMs,
       );
       response = await this.send(path, init);
       this.keepRateLimit(response);

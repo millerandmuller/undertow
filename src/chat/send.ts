@@ -1,3 +1,4 @@
+import { REQUEST_TIMEOUT_MS, requestSignal } from '../util/http.ts';
 import type { Helix } from '../util/helix.ts';
 
 export type ChatSendRequest = {
@@ -23,6 +24,7 @@ export type ChatSendResult = {
 
 export type ChatSenderOptions = {
   now?: () => number;
+  requestTimeoutMs?: number;
   log?: (entry: unknown) => void;
 };
 
@@ -31,6 +33,7 @@ export class ChatSender {
   private broadcasterId: string;
   private now: () => number;
   private log: (entry: unknown) => void;
+  private requestTimeoutMs: number;
   private lastAttemptMs = Number.NEGATIVE_INFINITY;
 
   constructor(
@@ -41,6 +44,7 @@ export class ChatSender {
     this.helix = helix;
     this.broadcasterId = broadcasterId;
     this.now = options.now ?? Date.now;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
     this.log = options.log ?? console.log;
   }
 
@@ -61,6 +65,7 @@ export class ChatSender {
     if (replyParentMessageId) body.reply_parent_message_id = replyParentMessageId;
     const response = await this.helix.request('chat/messages', {
       method: 'POST',
+      signal: requestSignal(this.requestTimeoutMs),
       body: JSON.stringify(body),
     }) as ChatSendResponse;
     const result = response.data[0];

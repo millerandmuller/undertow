@@ -118,7 +118,7 @@ export async function startOverlayServer(
   const project = options.mapState ?? snapshot;
   let actualPort = port;
   const server = createServer((request, response) => {
-    const host = request.headers.host ?? '';
+    const host = (request.headers.host ?? '').toLowerCase();
     const allowedHosts = new Set([
       `127.0.0.1:${actualPort}`,
       `localhost:${actualPort}`,

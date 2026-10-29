@@ -7,7 +7,7 @@ import { baselineSettings } from './helpers/fixtures.ts';
 import { FakeSocket } from './helpers/fakes.ts';
 import { loadConfig } from '../src/config.ts';
 import { startRun, type RunClock } from '../src/run.ts';
-import type { Helix } from '../src/util/helix.ts';
+import { Helix } from '../src/util/helix.ts';
 
 class SimulatedClock implements RunClock {
   timeMs = 0;
@@ -40,6 +40,8 @@ async function openRun(options: {
   requests?: { path: string; body: Record<string, unknown> }[];
   delay?: (milliseconds: number) => Promise<void>;
   existingBaseline?: boolean;
+  externalHelix?: Helix;
+  stopDrainTimeoutMs?: number;
 }) {
   FakeSocket.reset();
   if (options.existingBaseline) {
@@ -86,7 +88,8 @@ async function openRun(options: {
   } as Helix;
   const clock = options.clock ?? new SimulatedClock();
   const starting = startRun({
-    helix,
+    helix: options.externalHelix ?? helix,
+    stopDrainTimeoutMs: options.stopDrainTimeoutMs,
     broadcasterId: '42',
     profile: await loadConfig('real'),
     stateDirectory: options.directory,
@@ -537,6 +540,97 @@ test('dry run writes decision records without changing settings', async () => {
     assert.equal(JSON.parse(lines[0]).pace_source, 'recorded');
     assert.equal(methods.some((method) => method.startsWith('PATCH ')), false);
   } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('full echoes keep ownership of unchanged keys and preserve manual slow duration', async () => {
+  for (const manualSlow of [false, true]) {
+    await withLiveRun(async (run) => {
+      await driveToFirstStep(run, `full-echo-${manualSlow}`);
+      const manual = manualSlow
+        ? { ...run.settings, slow_mode_wait_time: 60 }
+        : { ...run.settings, emote_mode: true };
+      run.setSettings(manual);
+      await sendEvent(run, settingsEvent('full-manual', manual));
+      await run.handle.stop();
+      assert.equal(run.settings.slow_mode, manualSlow);
+      if (manualSlow) assert.equal(run.settings.slow_mode_wait_time, 60);
+      else assert.equal(run.settings.emote_mode, true);
+    });
+  }
+});
+
+test('late slow-three echo after slow-ten is recognized as our expected history', async () => {
+  await withLiveRun(async (run, _requests, logs) => {
+    await driveToFirstStep(run, 'history');
+    const oldSnapshot = { ...run.settings };
+    for (let second = 0; second < 25; second += 1) {
+      for (let count = 0; count < 7; count += 1) {
+        run.socket.sendMessage(rawChatEvent(`history-next-${second}-${count}`));
+      }
+      await flushEvents();
+      await run.clock.seconds(1);
+      if (run.settings.slow_mode_wait_time === 10) break;
+    }
+    assert.equal(run.settings.slow_mode_wait_time, 10);
+    await sendEvent(run, settingsEvent('late-own-echo', oldSnapshot));
+    assert.equal(logs.some((entry) => typeof entry === 'object' && entry !== null &&
+      'type' in entry && entry.type === 'manual_settings_change'), false);
+    await run.handle.stop();
+    assert.equal(run.settings.slow_mode, baselineSettings.slow_mode);
+  });
+});
+
+test('stop reaches restore when a fake fetch never resolves an in-flight PATCH', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'undertow-hung-stop-'));
+  let channel = { ...baselineSettings };
+  let patchCount = 0;
+  let hung = false;
+  const fakeFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/chat/settings')) {
+      if (init?.method === 'PATCH') {
+        patchCount += 1;
+        channel = { ...channel, ...JSON.parse(String(init.body)) };
+        if (patchCount === 1) {
+          hung = true;
+          return new Promise<Response>(() => undefined);
+        }
+      }
+      return new Response(JSON.stringify({ data: [channel] }));
+    }
+    return new Response(JSON.stringify({ data: [] }));
+  };
+  const helix = new Helix('client', {
+    access_token: 'test-access', refresh_token: 'test-refresh', expires_in: 3600,
+    scope: [], token_type: 'bearer',
+  }, async () => undefined, { fetcher: fakeFetch, requestTimeoutMs: 10 });
+  const run = await openRun({
+    directory, dryRun: false, logs: [], methods: [], externalHelix: helix,
+    stopDrainTimeoutMs: 5,
+  });
+  try {
+    for (let second = 0; second < 35; second += 1) {
+      for (let count = 0; count < 7; count += 1) {
+        run.socket.sendMessage(rawChatEvent(`hung-${second}-${count}`));
+      }
+      await flushEvents();
+      const ticking = run.clock.seconds(1);
+      let settled = false;
+      void ticking.then(() => { settled = true; });
+      while (!hung && !settled) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      if (hung) break;
+      await ticking;
+    }
+    assert.equal(hung, true);
+    await run.handle.stop();
+    assert.equal(patchCount, 2);
+    assert.equal(channel.slow_mode, false);
+  } finally {
+    await run.handle.stop();
     await rm(directory, { recursive: true, force: true });
   }
 });

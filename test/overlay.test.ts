@@ -263,6 +263,16 @@ test('overlay rejects Host headers outside the local address allowlist', async (
       request.once('error', reject);
     });
     assert.equal(status, 421);
+    const localStatus = await new Promise<number>((resolve, reject) => {
+      const request = httpGet(server.url, {
+        headers: { Host: `LOCALHOST:${server.port}` },
+      }, (response) => {
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      });
+      request.once('error', reject);
+    });
+    assert.equal(localStatus, 200);
   } finally {
     await server.stop();
   }

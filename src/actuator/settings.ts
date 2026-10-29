@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import { atomicJson, readJson } from '../util/files.ts';
 import { access, unlink } from 'node:fs/promises';
 import type { Helix } from '../util/helix.ts';
@@ -89,7 +90,12 @@ export async function restoreBaseline(
   api: ChatSettingsApi,
   path: string,
 ): Promise<ChatSettings> {
-  const baseline = await readJson<ChatSettings>(path);
+  let baseline: ChatSettings;
+  try {
+    baseline = parseBaseline(await readJson<unknown>(path));
+  } catch {
+    throw new Error(`${basename(path)} is unreadable: fix or delete it`);
+  }
   const patch = baselinePatch(baseline);
   await api.update(patch);
   const actual = await api.get();
@@ -126,4 +132,21 @@ export async function probeWithRestore(
     throw error;
   }
   return restoreBaseline(api, path);
+}
+
+function parseBaseline(value: unknown): ChatSettings {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Invalid baseline');
+  }
+  const raw = value as Record<string, unknown>;
+  for (const key of BOOLEAN_FIELDS) {
+    if (typeof raw[key] !== 'boolean') throw new Error('Invalid baseline');
+  }
+  const wait = raw.slow_mode_wait_time;
+  const duration = raw.follower_mode_duration;
+  if (typeof wait !== 'number' || !Number.isInteger(wait) ||
+    (wait !== 0 && (wait < 3 || wait > 120))) throw new Error('Invalid baseline');
+  if (typeof duration !== 'number' || !Number.isInteger(duration) ||
+    duration < 0 || duration > 129600) throw new Error('Invalid baseline');
+  return raw as ChatSettings;
 }
