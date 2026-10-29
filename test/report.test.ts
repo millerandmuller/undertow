@@ -551,7 +551,7 @@ test('report accept applies a passing Codex proposal only to the scratch config'
   const output: string[] = [];
   const proposal = {
     ...card,
-    proposed: { setpoint: 1.5, dwell_s: 20, release_hold_s: 40 },
+    proposed: { setpoint: 1.2, dwell_s: 20, release_hold_s: 40 },
   };
   try {
     await reportCommand([
@@ -570,11 +570,11 @@ test('report accept applies a passing Codex proposal only to the scratch config'
     assert.deepEqual(afterConfig.real, beforeConfig.real);
     assert.deepEqual(afterConfig.loadtest, {
       ...beforeConfig.loadtest,
-      setpoint_msgs_per_s: 1.5,
+      setpoint_msgs_per_s: 1.2,
       dwell_s: 20,
       release_hold_s: 40,
     });
-    assert.ok(output.includes('  setpoint_msgs_per_s: 2 -> 1.5'));
+    assert.ok(output.includes('  setpoint_msgs_per_s: 1.5 -> 1.2'));
     assert.ok(output.includes('  dwell_s: 15 -> 20'));
     assert.ok(output.includes('  release_hold_s: 30 -> 40'));
     assert.equal(await readFile('undertow.config.json', 'utf8'), repositoryConfig);

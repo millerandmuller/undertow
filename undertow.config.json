@@ -5,6 +5,7 @@
     "dwell_s": 20,
     "release_hold_s": 30,
     "release_ratio": 0.5,
+    "sustain_ratio": 0.8,
     "warning_boost": 1.5,
     "warning_hold_s": 20,
     "override_hold_s": 60,
@@ -17,11 +18,12 @@
     ]
   },
   "loadtest": {
-    "setpoint_msgs_per_s": 2,
+    "setpoint_msgs_per_s": 1.5,
     "window_s": 10,
     "dwell_s": 15,
     "release_hold_s": 30,
     "release_ratio": 0.5,
+    "sustain_ratio": 0.8,
     "warning_boost": 1.5,
     "warning_hold_s": 10,
     "override_hold_s": 60,

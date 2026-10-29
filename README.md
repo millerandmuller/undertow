@@ -9,6 +9,9 @@ When pace stays above the setpoint for 20 seconds, it steps up one rung; it
 holds each rung for at least 20 seconds. It steps down one rung after pace stays
 below 3 messages per second for 30 seconds. Between 3 and 6 messages per second,
 hysteresis keeps the current setting in place.
+`sustain_ratio` defaults to 0.8, so at least 80 percent of one-second readings
+in the dwell must exceed the effective setpoint; release still requires every
+reading to remain below its threshold.
 
 1. Slow mode 3 s lets each viewer post once every 3 seconds, a light first pause
    when chat starts running faster than the setpoint.
@@ -98,8 +101,8 @@ The planned test uses up to eight labeled plain accounts owned by the team on
 the team's test channel. The broadcaster is always `TWITCH_CHANNEL_LOGIN`;
 account files for that broadcaster are refused. The command uses whichever
 account files exist, and each sends neutral scripted lines with the visible
-`[load test] ` prefix. The `loadtest` profile has a scaled setpoint of 2 messages
-per second instead of 6.
+`[load test] ` prefix. The `loadtest` profile has a scaled setpoint of 1.5 messages
+per second instead of 6 and a release level of 0.75 messages per second.
 
 Create one account file per sender: sign in to that account, run
 `npm run login -- --account <login>`, and enter the code at `twitch.tv/activate`.

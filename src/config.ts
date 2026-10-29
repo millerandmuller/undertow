@@ -12,6 +12,7 @@ export type ProfileConfig = {
   dwell_s: number;
   release_hold_s: number;
   release_ratio: number;
+  sustain_ratio: number;
   warning_boost: number;
   warning_hold_s: number;
   override_hold_s: number;
@@ -80,7 +81,8 @@ function parseProfile(value: unknown, name: string): ProfileConfig {
   const raw = value as Record<string, unknown>;
   const fields = [
     'setpoint_msgs_per_s', 'window_s', 'dwell_s', 'release_hold_s',
-    'release_ratio', 'warning_boost', 'warning_hold_s', 'override_hold_s',
+    'release_ratio', 'sustain_ratio', 'warning_boost', 'warning_hold_s',
+    'override_hold_s',
   ] as const;
   for (const field of fields) {
     if (typeof raw[field] !== 'number') throw new Error(`${name}.${field} must be a number`);
@@ -89,12 +91,16 @@ function parseProfile(value: unknown, name: string): ProfileConfig {
   if ((raw.release_ratio as number) >= 1) {
     throw new Error(`${name}.release_ratio must be less than 1`);
   }
+  if ((raw.sustain_ratio as number) > 1) {
+    throw new Error(`${name}.sustain_ratio must be at most 1`);
+  }
   const config: ProfileConfig = {
     setpoint_msgs_per_s: raw.setpoint_msgs_per_s as number,
     window_s: raw.window_s as number,
     dwell_s: raw.dwell_s as number,
     release_hold_s: raw.release_hold_s as number,
     release_ratio: raw.release_ratio as number,
+    sustain_ratio: raw.sustain_ratio as number,
     warning_boost: raw.warning_boost as number,
     warning_hold_s: raw.warning_hold_s as number,
     override_hold_s: raw.override_hold_s as number,

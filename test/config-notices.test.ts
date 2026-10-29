@@ -16,11 +16,16 @@ test('config loads named profiles and validates their ladder', async () => {
   const real = await loadConfig('real');
   const loadtest = await loadConfig('loadtest');
   assert.equal(real.setpoint_msgs_per_s, 6);
+  assert.equal(real.dwell_s, 20);
   assert.deepEqual(real.ladder.map((step) => step.kind), [
     'slow', 'slow', 'slow', 'followers', 'emote',
   ]);
-  assert.equal(loadtest.setpoint_msgs_per_s, 2);
+  assert.equal(loadtest.setpoint_msgs_per_s, 1.5);
   assert.equal(loadtest.dwell_s, 15);
+  assert.equal(loadtest.release_hold_s, 30);
+  assert.equal(loadtest.setpoint_msgs_per_s * loadtest.release_ratio, 0.75);
+  assert.equal(real.sustain_ratio, 0.8);
+  assert.equal(loadtest.sustain_ratio, 0.8);
   await assert.rejects(loadConfig('other'), /must be real or loadtest/);
 });
 
@@ -47,10 +52,30 @@ test('config rejects invalid ladder actuator values', async () => {
     };
     await writeFile(path, JSON.stringify(invalid));
     await assert.rejects(loadConfig('real', path), /integer from 0 to 129600/);
+    await writeFile(path, JSON.stringify({
+      real: rawProfile(0),
+    }));
+    await assert.rejects(loadConfig('real', path), /sustain_ratio must be a positive/);
+    await writeFile(path, JSON.stringify({
+      real: rawProfile(1.01),
+    }));
+    await assert.rejects(loadConfig('real', path), /sustain_ratio must be at most 1/);
+    await writeFile(path, JSON.stringify({
+      real: rawProfile(1),
+    }));
+    assert.equal((await loadConfig('real', path)).sustain_ratio, 1);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+function rawProfile(sustainRatio: number): Record<string, unknown> {
+  return {
+    ...profile,
+    sustain_ratio: sustainRatio,
+    ladder: profile.ladder.map((step) => ({ kind: step.kind, ...step.patch })),
+  };
+}
 
 test('profile flag overrides profile environment variable', () => {
   const previous = process.env.UNDERTOW_PROFILE;
