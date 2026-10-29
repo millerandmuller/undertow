@@ -297,6 +297,25 @@ export function isLoginFailure(message: string): boolean {
     /^Token refresh failed \(40[01]\)$/.test(message);
 }
 
+function isUncertainPatchError(error: unknown, depth = 0): boolean {
+  if (!(error instanceof Error) || depth > 2) return false;
+  if (/^Helix request failed \(\d{3}\):/.test(error.message)) return false;
+  if (error.name === 'AbortError' || error.name === 'TimeoutError') return true;
+  const code = (error as NodeJS.ErrnoException).code;
+  const timeoutCodes = [
+    'ABORT_ERR', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT',
+    'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+  ];
+  if (code && timeoutCodes.includes(code)) return true;
+  return isUncertainPatchError(error.cause, depth + 1);
+}
+
+type UncertainPatch = {
+  before: ChatSettings;
+  attempted: ChatSettings;
+  keys: (keyof ChatSettings)[];
+};
+
 export async function startRun(options: RunOptions): Promise<RunHandle> {
   const logger = options.log ?? console.log;
   const clock = options.clock ?? SYSTEM_CLOCK;
@@ -326,6 +345,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
   let expectedHistory = [structuredClone(expected)];
   const controllerOwned = new Set<keyof ChatSettings>();
   const manuallyChanged = new Set<keyof ChatSettings>();
+  let uncertainPatch: UncertainPatch | null = null;
   const runStartedAt = clock.now();
   if (options.recordPath) {
     await mkdir(dirname(options.recordPath), { recursive: true, mode: 0o700 });
@@ -389,6 +409,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
 
   const restoreOwnedSettings = async (): Promise<void> => {
     const actual = await settingsApi.get();
+    await reconcileUncertainPatch(actual);
     const patch: ChatSettingsPatch = {};
     const owns = (key: keyof ChatSettings): boolean => controllerOwned.has(key) &&
       actual[key] === expected[key];
@@ -441,6 +462,29 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
 
   function rememberExpected(settings: ChatSettings): void {
     expectedHistory = [...expectedHistory, structuredClone(settings)].slice(-3);
+  }
+
+  async function reconcileUncertainPatch(actual: ChatSettings): Promise<void> {
+    if (!uncertainPatch) return;
+    const pending = uncertainPatch;
+    let baselineChanged = false;
+    for (const key of PATCH_KEYS) {
+      if (pending.keys.includes(key) && actual[key] === pending.attempted[key]) {
+        if (actual[key] !== pending.before[key]) {
+          controllerOwned.add(key);
+          manuallyChanged.delete(key);
+        }
+      } else if (actual[key] !== pending.before[key]) {
+        controllerOwned.delete(key);
+        manuallyChanged.add(key);
+        Object.assign(baseline, { [key]: actual[key] });
+        baselineChanged = true;
+      }
+    }
+    if (baselineChanged) await saveBaseline(baselinePath, baseline);
+    expected = structuredClone(actual);
+    rememberExpected(expected);
+    uncertainPatch = null;
   }
 
   const eventSub = new EventSub(
@@ -632,6 +676,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     const previousOwned = new Set(controllerOwned);
     const previousManual = new Set(manuallyChanged);
     expected = patchSnapshot(expected, patch);
+    const attempted = structuredClone(expected);
     rememberExpected(expected);
     for (const key of Object.keys(patch) as (keyof ChatSettings)[]) {
       controllerOwned.add(key);
@@ -646,12 +691,22 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       for (const key of previousOwned) controllerOwned.add(key);
       manuallyChanged.clear();
       for (const key of previousManual) manuallyChanged.add(key);
+      if (isUncertainPatchError(error)) {
+        // An aborted response does not tell us whether Twitch applied the PATCH.
+        uncertainPatch = {
+          before: structuredClone(previousExpected),
+          attempted: structuredClone(attempted),
+          keys: Object.keys(patch) as (keyof ChatSettings)[],
+        };
+        rememberExpected(attempted);
+      }
       throw error;
     }
   }
 
   async function tick(): Promise<void> {
     if (stopped) return;
+    if (uncertainPatch) await reconcileUncertainPatch(await settingsApi.get());
     const nowMs = clock.now();
     const pace = rate(paceState, nowMs);
     if (paused && nowMs >= authRetryAtMs) {

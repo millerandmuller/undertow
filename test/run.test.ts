@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { baselineSettings } from './helpers/fixtures.ts';
 import { FakeSocket } from './helpers/fakes.ts';
+import { PatchFailureSurface, type PatchFailure } from './helpers/patch-failure.ts';
 import { loadConfig } from '../src/config.ts';
 import { startRun, type RunClock } from '../src/run.ts';
 import { Helix } from '../src/util/helix.ts';
@@ -632,5 +633,124 @@ test('stop reaches restore when a fake fetch never resolves an in-flight PATCH',
   } finally {
     await run.handle.stop();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+
+async function withFailedPatchRun(
+  failure: PatchFailure,
+  applied: boolean,
+  callback: (run: Awaited<ReturnType<typeof openRun>>, surface: PatchFailureSurface,
+    logs: unknown[], directory: string) => Promise<void>,
+): Promise<void> {
+  const directory = await mkdtemp(join(tmpdir(), 'undertow-patch-outcome-'));
+  const surface = new PatchFailureSurface(failure, applied);
+  const logs: unknown[] = [];
+  const run = await openRun({
+    directory,
+    dryRun: false,
+    logs,
+    methods: surface.methods,
+    externalHelix: surface.createHelix(),
+  });
+  try {
+    await callback(run, surface, logs, directory);
+  } finally {
+    await run.handle.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+function hasManualChange(logs: unknown[]): boolean {
+  return logs.some((entry) => typeof entry === 'object' && entry !== null &&
+    'type' in entry && entry.type === 'manual_settings_change');
+}
+
+function fullSettingsEvent(id: string, settings: typeof baselineSettings): unknown {
+  const { slow_mode_wait_time, follower_mode_duration, ...modes } = settings;
+  return settingsEvent(id, {
+    ...modes,
+    slow_mode_wait_time_seconds: slow_mode_wait_time,
+    follower_mode_duration_minutes: follower_mode_duration,
+  });
+}
+
+test('applied PATCH timeout or abort echoes stay ours and exit restores baseline', async () => {
+  for (const failure of ['timeout', 'abort'] as const) {
+    await withFailedPatchRun(failure, true, async (run, surface, logs, directory) => {
+      const baselinePath = join(directory, 'baseline.json');
+      const baselineBefore = await readFile(baselinePath, 'utf8');
+      await driveToFirstStep(run, `applied-${failure}`);
+      assert.equal(surface.settings.slow_mode, true);
+      assert.equal(surface.patchCount, 1);
+      await sendEvent(run, fullSettingsEvent(`echo-${failure}`, surface.settings));
+      assert.equal(hasManualChange(logs), false);
+      assert.equal(await readFile(baselinePath, 'utf8'), baselineBefore);
+      if (failure === 'abort') {
+        const getsBefore = surface.getCount;
+        await run.clock.seconds(1);
+        assert.equal(surface.getCount, getsBefore + 1);
+        assert.equal(surface.patchCount, 1);
+      }
+      await run.handle.stop();
+      assert.equal(surface.settings.slow_mode, baselineSettings.slow_mode);
+      assert.equal(surface.patchCount, 2);
+      assert.equal(hasManualChange(logs), false);
+    });
+  }
+});
+
+test('a real 5xx rolls back and its old-state echo is not manual', async () => {
+  await withFailedPatchRun('server', false, async (run, surface, logs, directory) => {
+    const path = join(directory, 'baseline.json');
+    const baselineBefore = await readFile(path, 'utf8');
+    await driveToFirstStep(run, 'server-rejection');
+    await sendEvent(run, fullSettingsEvent('server-old-echo', surface.settings));
+    assert.equal(hasManualChange(logs), false);
+    assert.equal(await readFile(path, 'utf8'), baselineBefore);
+    const getsBefore = surface.getCount;
+    await run.clock.seconds(1);
+    assert.equal(surface.getCount, getsBefore);
+    await run.handle.stop();
+    assert.equal(surface.patchCount, 1);
+    assert.deepEqual(surface.settings, baselineSettings);
+  });
+});
+
+test('unapplied timeout with no echo reconciles at exit without another PATCH', async () => {
+  await withFailedPatchRun('timeout', false, async (run, surface, logs) => {
+    await driveToFirstStep(run, 'unapplied-timeout');
+    const getsBefore = surface.getCount;
+    await run.handle.stop();
+    assert.ok(surface.getCount > getsBefore);
+    assert.equal(surface.patchCount, 1);
+    assert.deepEqual(surface.settings, baselineSettings);
+    assert.equal(hasManualChange(logs), false);
+  });
+});
+
+test('dry run startup rotates old content but leaves empty or missing logs alone', async () => {
+  for (const content of ['earlier storm\n', '', null]) {
+    const directory = await mkdtemp(join(tmpdir(), 'undertow-startup-rotation-'));
+    const path = join(directory, 'storm.log.jsonl');
+    if (content !== null) await writeFile(path, content);
+    const run = await openRun({ directory, dryRun: true, logs: [], methods: [] });
+    try {
+      const archives = (await readdir(directory)).filter((name) =>
+        /^storm\.log\.\d{4}-.*\.jsonl$/.test(name));
+      assert.equal(archives.length, content ? 1 : 0);
+      if (content) {
+        const archive = join(directory, archives[0]);
+        assert.equal(await readFile(archive, 'utf8'), content);
+        assert.equal((await stat(archive)).mode & 0o777, 0o600);
+      }
+      if (content === null) await assert.rejects(readFile(path), { code: 'ENOENT' });
+      else assert.equal(await readFile(path, 'utf8'), '');
+      await run.clock.seconds(1);
+      assert.equal(JSON.parse((await readFile(path, 'utf8')).trim()).action, 'dry_none');
+    } finally {
+      await run.handle.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 });
