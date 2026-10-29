@@ -96,7 +96,7 @@ test('Codex scratch contains only supplied files and is removed after success', 
   const stateDirectory = join(directory, 'state');
   await mkdir(stateDirectory);
   const storm = join(stateDirectory, 'storm.log.jsonl');
-  await writeFile(storm, '{"action":"step_up"}\n');
+  await writeFile(storm, '{"action":"step_up","pace_source":"recorded"}\n');
   const profile = await loadConfig('loadtest');
   let scratch = '';
   let command = '';
@@ -116,7 +116,7 @@ test('Codex scratch contains only supplied files and is removed after success', 
         'utf8',
       )) as Record<string, unknown>;
       assert.equal(await readFile(join(options.cwd, 'storm.log.jsonl'), 'utf8'),
-        '{"action":"step_up"}\n');
+        '{"action":"step_up","pace_source":"recorded"}\n');
       assert.ok(args.every((item) => !item.includes(process.cwd())));
       assert.ok(options.cwd.startsWith(tmpdir()));
       assert.equal(options.env.TWITCH_CLIENT_SECRET, undefined);
@@ -538,7 +538,7 @@ test('report rejects a pace label missing from a storm log line', async () => {
       configPath: fixture.configPath,
       processRunner: reportRunner(card),
       output: () => undefined,
-    }), /line 1.*missing or unknown pace_source/);
+    }), /no labeled lines with pace_source/);
   } finally {
     await rm(fixture.directory, { recursive: true, force: true });
   }
@@ -745,3 +745,30 @@ function passingScore(): ReportScore {
 async function temporaryDirectory(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'undertow-report-test-'));
 }
+
+
+test('report ignores legacy prefix and supplies only labeled lines to Codex', async () => {
+  const fixture = await commandFixture();
+  const output: string[] = [];
+  const labeled = decisionLine();
+  await writeFile(fixture.stormPath, '{}\n{}\n' + labeled);
+  const runner: CodexProcessRunner = (_command, _args, options) => fakeProcess(async () => {
+    assert.equal(await readFile(join(options.cwd, 'storm.log.jsonl'), 'utf8'), labeled);
+    await writeFile(join(options.cwd, 'last-message.json'), JSON.stringify(card));
+  });
+  try {
+    await reportCommand(['--profile', 'loadtest'], {
+      stateDirectory: fixture.stateDirectory,
+      configPath: fixture.configPath,
+      processRunner: runner,
+      scorer: async () => passingScore(),
+      output: (line) => output.push(line),
+    });
+    assert.ok(output.includes('ignored 2 legacy lines without pace_source'));
+    const saved = await readSavedReport(fixture.reportPath);
+    await writeFile(fixture.stormPath, '{"old":true}\n' + labeled);
+    assert.equal(saved?.storm_hash, await readStormHash(fixture.stormPath, true));
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});

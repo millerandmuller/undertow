@@ -1,6 +1,7 @@
+import { readLabeledStorm } from './storm.ts';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ProfileConfig } from '../config.ts';
@@ -91,7 +92,8 @@ export async function generateReport(
   const schemaPath = join(scratch, 'report.schema.json');
   const outputPath = join(scratch, 'last-message.json');
   try {
-    await copyFile(logPath, join(scratch, 'storm.log.jsonl'));
+    const storm = await readLabeledStorm(logPath);
+    await writeFile(join(scratch, 'storm.log.jsonl'), storm.text, { mode: 0o600 });
     const stormHash = createHash('sha256')
       .update(await readFile(join(scratch, 'storm.log.jsonl')))
       .digest('hex');

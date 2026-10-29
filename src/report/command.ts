@@ -1,5 +1,5 @@
+import { readLabeledStorm } from './storm.ts';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, type ProfileConfig } from '../config.ts';
@@ -25,7 +25,6 @@ export type SavedReport = {
 };
 
 type PaceLabel = 'recorded' | 'modeled' | 'mixed' | 'unknown';
-type PaceLogEntry = { t?: string; action?: string; pace_source: 'recorded' | 'modeled' };
 
 export type ReportCommandDependencies = {
   stateDirectory?: string;
@@ -78,7 +77,7 @@ export async function reportCommand(
   const profileName = explicitProfile ?? (savedOnly ? saved?.profile : undefined) ??
     process.env.UNDERTOW_PROFILE ?? 'real';
   const profile = await loadConfig(profileName, configPath);
-  await readStormHash(stormPath, !savedOnly);
+  await readStormHash(stormPath, !savedOnly, output);
   const paceLabels = savedOnly ? null : await readPaceLabels(stormPath);
   const scenario = option(args, '--scenario') ?? 'replays/gift-wave.jsonl';
   let report: SavedReport;
@@ -220,53 +219,36 @@ export async function readSavedReport(path: string): Promise<SavedReport | null>
 export async function readStormHash(
   path: string,
   required: boolean,
+  output?: (line: string) => void,
 ): Promise<string | null> {
   try {
-    const bytes = await readFile(path);
-    if (bytes.length === 0 || !bytes.toString('utf8').trim()) {
-      throw new Error('Storm log is empty; run Undertow during a storm first');
-    }
-    return createHash('sha256').update(bytes).digest('hex');
+    const storm = await readLabeledStorm(path);
+    if (storm.ignored > 0) output?.(`ignored ${storm.ignored} legacy lines without pace_source`);
+    return createHash('sha256').update(storm.text).digest('hex');
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Storm log is empty')) {
-      if (required) throw error;
-      return null;
-    }
-    if (required) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (!required) return null;
       throw new Error(`Storm log is missing at ${path}; run Undertow during a storm first`);
     }
-    return null;
+    if (!required && error instanceof Error && error.message.startsWith('Storm log is empty')) {
+      return null;
+    }
+    throw error;
   }
 }
 
-export async function readPaceLabels(path: string): Promise<{
+export async function readPaceLabels(path: string, output?: (line: string) => void): Promise<{
   overall: PaceLabel;
   steps: PaceLabel[];
 }> {
-  const text = await readFile(path, 'utf8');
-  const entries = text.split(/\r?\n/).filter((line) => line.trim());
-  if (entries.length === 0) throw new Error('Storm log is empty');
-  const parsed = entries.map((line, index) => parsePaceLogEntry(line, index + 1));
-  const labels = parsed.map((entry) => entry.pace_source);
+  const storm = await readLabeledStorm(path);
+  if (storm.ignored > 0) output?.(`ignored ${storm.ignored} legacy lines without pace_source`);
+  const labels = storm.entries.map((entry) => entry.pace_source);
   const unique = [...new Set(labels)];
   const overall = unique.length === 1 ? unique[0] as PaceLabel : 'mixed';
-  const stepEntries = parsed.filter((entry) =>
+  const stepEntries = storm.entries.filter((entry) =>
     typeof entry.action === 'string' && /step_up|step_down|restore/.test(entry.action));
   return { overall, steps: stepEntries.map((entry) => entry.pace_source) };
-}
-
-function parsePaceLogEntry(line: string, lineNumber: number): PaceLogEntry {
-  let value: unknown;
-  try {
-    value = JSON.parse(line) as unknown;
-  } catch {
-    throw new Error(`Storm log line ${lineNumber} is invalid JSON`);
-  }
-  if (!isObject(value) || (value.pace_source !== 'recorded' &&
-    value.pace_source !== 'modeled')) {
-    throw new Error(`Storm log line ${lineNumber} has missing or unknown pace_source`);
-  }
-  return value as PaceLogEntry;
 }
 
 function printCard(
