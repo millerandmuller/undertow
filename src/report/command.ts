@@ -131,6 +131,9 @@ export async function reportCommand(
     return;
   }
   if (!score.passed) throw new Error('Proposal failed scoring and cannot be accepted');
+  if (report.profile !== profileName) {
+    throw new Error('Saved report profile does not match the profile being accepted');
+  }
   const acceptanceHash = await readStormHash(stormPath, true);
   if (!acceptanceHash || report.storm_hash !== acceptanceHash) {
     throw new Error('Storm log changed since this report; proposal cannot be accepted');
@@ -174,11 +177,19 @@ async function requestOrFallback(options: {
     };
     await atomicJson(options.savedPath, saved);
     return { report: saved, usedSaved: false };
-  } catch {
+  } catch (error) {
+    options.output(`Codex failed: ${codexFailureReason(error)}`);
     const saved = await readSavedReport(options.savedPath);
     if (saved) return { report: saved, usedSaved: true };
     throw new Error('Codex report unavailable and no saved report exists');
   }
+}
+
+function codexFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (/^Codex exited with status \d+$/.test(message)) return message;
+  if (/^Codex report timed out after \d+ seconds$/.test(message)) return message;
+  return 'unavailable or returned invalid output';
 }
 
 export async function readSavedReport(path: string): Promise<SavedReport | null> {

@@ -122,5 +122,12 @@ export async function loadConfig(
 
 export function selectedProfile(args: string[]): string {
   const index = args.indexOf('--profile');
-  return index >= 0 ? args[index + 1] ?? '' : process.env.UNDERTOW_PROFILE ?? 'real';
+  if (index >= 0) {
+    const profile = args[index + 1] ?? '';
+    if (profile !== 'real' && profile !== 'loadtest') {
+      throw new Error('Invalid --profile flag; choose real or loadtest');
+    }
+    return profile;
+  }
+  return process.env.UNDERTOW_PROFILE ?? 'real';
 }

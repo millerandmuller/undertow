@@ -116,7 +116,19 @@ export async function startOverlayServer(
 ): Promise<{ url: string; port: number; stop(): Promise<void> }> {
   const clients = new Set<Client>();
   const project = options.mapState ?? snapshot;
+  let actualPort = port;
   const server = createServer((request, response) => {
+    const host = request.headers.host ?? '';
+    const allowedHosts = new Set([
+      `127.0.0.1:${actualPort}`,
+      `localhost:${actualPort}`,
+      `[::1]:${actualPort}`,
+    ]);
+    if (!allowedHosts.has(host)) {
+      response.writeHead(421, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('misdirected request');
+      return;
+    }
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     if (request.method !== 'GET') {
       sendNotFound(response);
@@ -162,7 +174,7 @@ export async function startOverlayServer(
     await new Promise<void>((resolve) => server.close(() => resolve()));
     throw new Error('Overlay server did not report its listening address');
   }
-  const actualPort = address.port;
+  actualPort = address.port;
   let stopped = false;
   return {
     url: `http://127.0.0.1:${actualPort}/`,

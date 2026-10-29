@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { get as httpGet } from 'node:http';
 import { createDisplayState } from '../src/run.ts';
 import { startOverlayServer } from '../src/overlay/server.ts';
 import {
@@ -246,6 +247,22 @@ test('overlay rejects traversal and unknown paths', async () => {
     assert.equal(traversal.status, 404);
     const unknown = await fetch(new URL('/private.txt', server.url));
     assert.equal(unknown.status, 404);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('overlay rejects Host headers outside the local address allowlist', async () => {
+  const server = await startOverlayServer(createDisplayState(6), 0);
+  try {
+    const status = await new Promise<number>((resolve, reject) => {
+      const request = httpGet(server.url, { headers: { Host: 'example.com' } }, (response) => {
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      });
+      request.once('error', reject);
+    });
+    assert.equal(status, 421);
   } finally {
     await server.stop();
   }

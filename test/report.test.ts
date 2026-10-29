@@ -412,17 +412,45 @@ test('report fallback uses saved card and fails clearly without one', async () =
       output: (line) => output.push(line),
     });
     assert.ok(output.some((line) => line.startsWith('saved report (')));
+    assert.ok(output.includes('Codex failed: Codex report timed out after 90 seconds'));
     assert.ok(output.includes('waiting for codex... 5 s of 90 s'));
     assert.ok(output.some((line) => line.includes('peak pace 2.0 msgs/s (modeled)')));
     const emptyDirectory = join(fixture.directory, 'empty-state');
     await mkdir(emptyDirectory);
     await writeFile(join(emptyDirectory, 'storm.log.jsonl'), decisionLine());
+    const failedOutput: string[] = [];
     await assert.rejects(reportCommand(['--profile', 'loadtest'], {
       stateDirectory: emptyDirectory,
       configPath: fixture.configPath,
       processRunner: failedRunner,
-      output: () => undefined,
+      output: (line) => failedOutput.push(line),
     }), /Codex report unavailable and no saved report exists/);
+    assert.ok(failedOutput.includes('Codex failed: Codex exited with status 4'));
+  } finally {
+    await rm(fixture.directory, { recursive: true, force: true });
+  }
+});
+
+test('saved reports cannot be accepted into a different profile', async () => {
+  const fixture = await commandFixture();
+  const hash = await readStormHash(fixture.stormPath, true);
+  assert.ok(hash);
+  await saveReport(fixture.reportPath, {
+    ...card,
+    proposed: { setpoint: 6, dwell_s: 20, release_hold_s: 40 },
+  }, hash);
+  const before = await readFile(fixture.configPath, 'utf8');
+  try {
+    await assert.rejects(reportCommand([
+      '--saved', '--accept', '--profile', 'real', '--scenario',
+      'replays/gift-wave.jsonl',
+    ], {
+      stateDirectory: fixture.stateDirectory,
+      configPath: fixture.configPath,
+      scorer: async () => passingScore(),
+      output: () => undefined,
+    }), /profile does not match/);
+    assert.equal(await readFile(fixture.configPath, 'utf8'), before);
   } finally {
     await rm(fixture.directory, { recursive: true, force: true });
   }
