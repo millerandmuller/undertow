@@ -78,7 +78,8 @@ function renderEvidence(history) {
     '',
     'Turn numbers are the numbered build requests sent into the single Codex',
     'thread. Commits without a number were made in turns whose mapping was not',
-    'recorded.',
+    'recorded. The thread count in the README is counted from the session file;',
+    'numbered requests and counted turns differ because requests were resent or split.',
     '',
   );
   return lines.join('\n');

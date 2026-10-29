@@ -50,8 +50,10 @@ npm run replay -- replays/gift-wave.jsonl --profile loadtest --overlay 0 --speed
 
 This replay is a simulation with no Twitch connection. Its response model is a
 synthetic assumption, so every before-and-after pace produced by the model is
-labeled “modeled”. The shipped storm reaches rung 4 of 5; the controller ramp
-unit test exercises emote-only at rung 5. The overlay URL is printed when the local server starts.
+labeled “modeled”. Labels are modeled for the response model, scripted for a
+synthetic stream, and recorded for a file written by `run --record`. The shipped
+storm reaches rung 4 of 5; the controller ramp unit test exercises emote-only at
+rung 5. The overlay URL is printed when the local server starts.
 
 ## Run scripts
 
@@ -190,6 +192,8 @@ rules are in `AGENTS.md`; build evidence and the commit list are in
 `docs/BUILD_EVIDENCE.md`.
 
 MIT, see LICENSE.
+
+Built in 23 turns in one Codex thread (counted from the session file on 2026-10-29).
 
 ## Layout and tests
 
