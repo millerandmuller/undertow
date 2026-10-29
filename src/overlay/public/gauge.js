@@ -57,3 +57,14 @@ export function stepDots(step, count = 5) {
   const active = Math.min(safeCount, Math.max(0, safeStep));
   return Array.from({ length: safeCount }, (_, index) => index < active);
 }
+
+export function warningChip(warning) {
+  if (warning === 'gift') return 'gift wave';
+  if (warning === 'raid') return 'raid';
+  return null;
+}
+
+export function isStale(nowMs, lastSignalMs, timeoutMs = 5000) {
+  return !Number.isFinite(nowMs) || !Number.isFinite(lastSignalMs) ||
+    nowMs - lastSignalMs >= timeoutMs;
+}

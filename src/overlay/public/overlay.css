@@ -55,8 +55,8 @@ body {
 
 .header {
   justify-content: space-between;
-  min-height: 19px;
-  flex: 0 0 19px;
+  min-height: 25px;
+  flex: 0 0 25px;
 }
 
 .wordmark {
@@ -114,8 +114,8 @@ body {
 .gauge {
   position: relative;
   display: flex;
-  flex: 0 0 128px;
-  height: 128px;
+  flex: 0 0 122px;
+  height: 122px;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
@@ -125,9 +125,9 @@ body {
 .gauge svg {
   display: block;
   width: 100%;
-  height: 96px;
+  height: 92px;
   overflow: hidden;
-  flex: 0 0 96px;
+  flex: 0 0 92px;
 }
 
 .arc {
@@ -163,7 +163,7 @@ body {
 
 .scale-label {
   fill: #9da9b6;
-  font-size: 13px;
+  font-size: 27px;
 }
 
 .scale-label.left {
@@ -176,7 +176,7 @@ body {
 
 .setpoint-label {
   fill: #ffd17a;
-  font-size: 10px;
+  font-size: 27px;
   text-anchor: middle;
 }
 
@@ -256,9 +256,23 @@ body {
 }
 
 .rate {
-  width: 110px;
-  height: 3px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 16px;
   margin-left: auto;
+}
+
+.rate span {
+  color: #c7d0da;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rate-track {
+  width: 76px;
+  height: 3px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.15);
   border-radius: 3px;

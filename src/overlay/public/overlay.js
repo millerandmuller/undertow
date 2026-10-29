@@ -2,9 +2,11 @@ import {
   GAUGE_HUB,
   arcPath,
   labelAnchor,
+  isStale,
   paceAngle,
   stepDots,
   tickEndpoints,
+  warningChip,
 } from './gauge.js';
 
 const card = document.querySelector('#card');
@@ -22,6 +24,7 @@ const arc = document.querySelector('#arc');
 const steps = document.querySelector('#steps');
 const rate = document.querySelector('#rate');
 const rateFill = document.querySelector('#rate-fill');
+const rateLabel = document.querySelector('#rate-label');
 const params = new URLSearchParams(location.search);
 const requestedScale = Number(params.get('scale') ?? '1');
 const scale = Number.isFinite(requestedScale)
@@ -73,8 +76,9 @@ function render(state) {
   const duplicateSimulationMode = state.mode === 'simulation' &&
     state.badge?.toUpperCase() === 'SIMULATION';
   mode.classList.toggle('hidden', duplicateSimulationMode);
-  warning.textContent = state.warning === 'gift' ? 'gift wave' : 'raid';
-  warning.classList.toggle('hidden', !state.warning);
+  const warningText = warningChip(state.warning);
+  warning.textContent = warningText ?? '';
+  warning.classList.toggle('hidden', warningText === null);
   over.classList.toggle('hidden', setpointValue <= 0 ||
     paceValue <= setpointValue * 2.5);
   needle.style.transform = `rotate(${90 - angle}deg)`;
@@ -83,6 +87,7 @@ function render(state) {
   renderSteps(state.step, state.stepCount);
   if (state.ratelimitRemaining !== null && state.ratelimitLimit > 0) {
     rate.classList.remove('hidden');
+    rateLabel.textContent = `${state.ratelimitRemaining} of ${state.ratelimitLimit}`;
     const percent = Math.min(100, Math.max(0,
       state.ratelimitRemaining / state.ratelimitLimit * 100));
     rateFill.style.width = `${percent}%`;
@@ -92,7 +97,7 @@ function render(state) {
 }
 
 function showConnectionState() {
-  const stale = Date.now() - lastSignalAt > 5000;
+  const stale = isStale(Date.now(), lastSignalAt);
   card.classList.toggle('stale', stale || connectionLost);
   if (connectionLost || stale) reason.textContent = 'reconnecting';
   else if (latest) reason.textContent = latest.lastReason || 'waiting for chat';
@@ -111,7 +116,6 @@ stream.addEventListener('heartbeat', () => {
   showConnectionState();
 });
 stream.onopen = () => {
-  lastSignalAt = Date.now();
   connectionLost = false;
   showConnectionState();
 };

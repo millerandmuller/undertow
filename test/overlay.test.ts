@@ -8,10 +8,12 @@ import {
   GAUGE_RADIUS,
   arcPath,
   labelAnchor,
+  isStale,
   paceAngle,
   pointOnArc,
   stepDots,
   tickEndpoints,
+  warningChip,
 } from '../src/overlay/public/gauge.js';
 import { simulationOverlayOptions } from '../src/sim/overlay-state.ts';
 
@@ -69,7 +71,19 @@ test('gauge geometry draws the dome and shares its arc with the needle and tick'
   assert.match(css, /width: 520px;/);
   assert.match(css, /transform: scale\(var\(--scale\)\)/);
   assert.match(css, /width: calc\(560px \* var\(--scale\)\)/);
-  assert.match(css, /\.gauge\s*\{[^}]*flex: 0 0 128px/s);
+  assert.match(css, /\.gauge\s*\{[^}]*flex: 0 0 122px/s);
+  assert.match(css, /\.scale-label\s*\{[^}]*font-size: 27px/s);
+  assert.match(css, /\.setpoint-label\s*\{[^}]*font-size: 27px/s);
+  assert.match(css, /\.rate span\s*\{[^}]*font-size: 12px/s);
+});
+
+test('warning chip and stale state are pure and recover on the next signal', () => {
+  assert.equal(warningChip('gift'), 'gift wave');
+  assert.equal(warningChip('raid'), 'raid');
+  assert.equal(warningChip(null), null);
+  assert.equal(isStale(4999, 0), false);
+  assert.equal(isStale(5000, 0), true);
+  assert.equal(isStale(5001, 5001), false);
 });
 
 test('simulation projection labels modeled pace without changing the run state', () => {
