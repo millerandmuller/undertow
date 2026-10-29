@@ -94,6 +94,8 @@ labeled `modeled` and is a synthetic assumption, not a measurement. The only
 impact number shown in the demo comes from the live load test; modeled numbers are
 for testing controller behavior. A grey card and `reconnecting` reason indicate a
 lost local connection.
+During accelerated replay, the gift/raid chip stays visible for at least the
+profile's `warning_hold_s` in wall time, even when simulated time runs faster.
 
 ## Labeled load test
 
@@ -116,3 +118,22 @@ actual send responses. It does not estimate impact. Load test state and
 message records are written to `.undertow/loadtest.state.json` and
 `.undertow/loadtest.log.jsonl`; the run loop uses the active state for the
 overlay badge. Account tokens are stored separately in `.undertow/accounts/`.
+
+## Post-storm report
+
+After a run, `npm run report` gives Codex only a copied storm log and a small
+profile context in a fresh temporary directory. The call uses a read-only
+sandbox and a 90-second limit. While it runs, elapsed time is shown. Codex
+returns a proposal card; it never edits the config. The replay simulator scores
+the current and proposed thresholds against the same scenario, and prints each
+criterion as PASS or FAIL. Rates from synthetic scenarios are labeled `modeled`;
+recorded scenarios are labeled `recorded`.
+
+Use `npm run report -- --profile loadtest --scenario replays/gift-wave.jsonl`
+to select a profile and scenario. `--saved` skips Codex and scores the last real
+report from `.undertow/report.last.json` (Plan B for a stormy night). If Codex
+cannot run, Undertow shows that saved report with its timestamp; without one it
+exits with an error. `--accept` applies only a proposal that scores PASS and
+whose saved storm-log hash still matches the current log. The three-value diff
+is printed before the config is updated. The scratch directory is removed after
+the Codex call, including on timeout and error.

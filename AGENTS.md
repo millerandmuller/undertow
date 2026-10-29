@@ -8,3 +8,4 @@
 - Simulated pieces live in `src/sim` and are labeled.
 - Modeled numbers live only in `src/sim` and are always labeled modeled.
 - Load test messages always carry the [load test] prefix.
+- Codex proposes, the simulator scores, a human accepts.
