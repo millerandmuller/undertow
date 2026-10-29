@@ -9,3 +9,5 @@
 - Modeled numbers live only in `src/sim` and are always labeled modeled.
 - Load test messages always carry the [load test] prefix.
 - Codex proposes, the simulator scores, a human accepts.
+- On stream, never show a token, a client secret, a device code or `.env` contents
+  on screen or in a log line, and never run the load test against a channel the team does not own.

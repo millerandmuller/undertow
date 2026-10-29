@@ -19,6 +19,14 @@ const TURN_COMMITS = new Map([
   ['6f5595f', '012'],
   ['b376fdf', '012'],
   ['36f8ea3', '012'],
+  ['0247ed6', '013'],
+  ['04b6fca', '014'],
+  ['d6e9648', '015'],
+  ['d29bff9', '016'],
+  ['98ce7ce', '017'],
+  ['f8875f5', '017'],
+  ['f6bf528', '017'],
+  ['c0dbe89', '017'],
 ]);
 
 const repo = option('--repo') ?? process.cwd();
@@ -50,7 +58,9 @@ function renderEvidence(history) {
     '',
     'This file records the commits on `main`, oldest first, with their author',
     'dates and subjects. It is generated from this repository’s `git log`.',
-    'External product names in commit subjects are replaced with neutral wording.',
+    'This file is generated before the commit that contains it, so that newest',
+    'commit is not listed. Two subject lines (`452034d` and `f8ad96b`) are shown',
+    'with product names removed and replaced with neutral wording.',
     '',
     '| Commit | Author date | Subject | Turn |',
     '| --- | --- | --- | --- |',

@@ -50,7 +50,8 @@ npm run replay -- replays/gift-wave.jsonl --profile loadtest --overlay 0 --speed
 
 This replay is a simulation with no Twitch connection. Its response model is a
 synthetic assumption, so every before-and-after pace produced by the model is
-labeled “modeled”. The overlay URL is printed when the local server starts.
+labeled “modeled”. The shipped storm reaches rung 4 of 5; the controller ramp
+unit test exercises emote-only at rung 5. The overlay URL is printed when the local server starts.
 
 ## Run scripts
 
@@ -90,6 +91,15 @@ never committed.
 | `TWITCH_CHANNEL_LOGIN` | Names the broadcaster channel Undertow may control. |
 | `TWITCH_CLIENT_SECRET` | Used only when refreshing tokens for a confidential application. |
 
+## Scopes
+
+The broadcaster login requests `user:read:chat`, `user:write:chat`, and
+`moderator:manage:chat_settings`. The run loop needs them to read chat, send
+notices, and change settings. Watch uses chat read; probe and restore use chat
+settings management. These commands validate the broadcaster token with all
+three scopes. Load-test account login requests only `user:write:chat`, which
+is the only scope those accounts need to send their scripted lines.
+
 ## Limits
 
 | Area | Limit | What the code does |
@@ -115,7 +125,8 @@ Each sender is a plain team account with `user:write:chat` permission and no
 moderator role. `--rate` sets messages per second per account up to 0.6;
 `--burst` sets the full-rate duration; `--taper` sets the linear fade duration.
 An internal rolling limiter permits at most 18 sends per account in 30 seconds.
-The overlay badge reads `load test, N accounts` while the test is active.
+`npm run loadtest -- --dry` also needs account files; create at least one
+before previewing the plan. The overlay badge reads `load test, N accounts` while the test is active.
 
 The summary reports attempted, accepted, and dropped sends and observed accepted
 rates. Its before-and-after pace is a scaled test result, not a claim about real
