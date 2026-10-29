@@ -1,3 +1,4 @@
+import { normalizeChatSettings, type NullableChatSettings } from '../util/chat-settings.ts';
 import { basename } from 'node:path';
 import { atomicJson, readJson } from '../util/files.ts';
 import { access, unlink } from 'node:fs/promises';
@@ -14,7 +15,7 @@ export type ChatSettings = {
 };
 
 export type ChatSettingsPatch = Partial<ChatSettings>;
-export type ChatSettingsResponse = { data: ChatSettings[] };
+export type ChatSettingsResponse = { data: NullableChatSettings[] };
 export type ChatSettingsApi = {
   get(): Promise<ChatSettings>;
   update(patch: ChatSettingsPatch): Promise<unknown>;
@@ -60,7 +61,7 @@ export function chatSettings(helix: Helix, broadcasterId: string): ChatSettingsA
   return {
     async get() {
       const response = await helix.request(path) as ChatSettingsResponse;
-      return response.data[0];
+      return normalizeChatSettings(response.data[0]);
     },
     async update(patch) {
       validatePatch(patch);

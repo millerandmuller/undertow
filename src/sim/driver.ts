@@ -3,10 +3,10 @@ import { dirname, join } from 'node:path';
 import type { ChatSettings, ChatSettingsPatch } from '../actuator/settings.ts';
 import { saveBaseline } from '../actuator/settings.ts';
 import type { ProfileConfig } from '../config.ts';
-import type { ChatSettingsNotification } from '../eventsub/client.ts';
 import { startRun, type DisplayState, type RunLog } from '../run.ts';
 import { SimulatedClock } from './clock.ts';
 import { SimulatedChannel } from './channel.ts';
+import { SimulatedSettingsPlayback } from './settings-playback.ts';
 import {
   emitSimulatedEvent, forceSimulatedReconnect, resetSimulatedSockets,
   SimulatedSocketConstructor,
@@ -23,6 +23,7 @@ export type ReplayDriverOptions = {
   speed?: number;
   sleep?: (milliseconds: number) => Promise<void>;
   onDisplay?: (display: DisplayState) => Promise<void> | void;
+  log?: (entry: unknown) => void;
 };
 export type ReplayResult = {
   decisions: ReplayDecision[];
@@ -65,7 +66,8 @@ export async function runReplay(
     if (options.speed !== undefined) await sleep(intervalMs / options.speed);
   });
   resetSimulatedSockets();
-  const channel = new SimulatedChannel(replay.header.baseline);
+  const channel = new SimulatedChannel(replay.header.baseline, () => clock.now());
+  const settingsPlayback = new SimulatedSettingsPlayback(channel);
   const helix = channel.createHelix();
   const run = await startRun({
     helix,
@@ -76,7 +78,7 @@ export async function runReplay(
     mode: 'simulation',
     socketConstructor: SimulatedSocketConstructor,
     clock,
-    log: () => undefined,
+    log: options.log ?? (() => undefined),
   });
   const recordedMessageOffsets: number[] = [];
   const simulatedMessageOffsets: number[] = [];
@@ -85,16 +87,15 @@ export async function runReplay(
     let didReconnect = false;
     for (let index = 0; index < replay.events.length; index += 1) {
       const item = replay.events[index];
-      await clock.advanceTo(item.at_ms);
+      await advanceReplayTo(item.at_ms);
       if (!didReconnect && reconnectAtMs !== undefined && item.at_ms >= reconnectAtMs) {
         forceSimulatedReconnect();
         didReconnect = true;
         await new Promise<void>((resolve) => setImmediate(resolve));
       }
       if (item.type === 'channel.chat_settings.update') {
-        channel.applyRecordedSettings(item.event as ChatSettingsNotification);
-      }
-      if (item.type === 'channel.chat.message') {
+        settingsPlayback.accept(item, index);
+      } else if (item.type === 'channel.chat.message') {
         recordedMessageOffsets.push(item.at_ms);
         const fraction = responseModel?.pass_through_by_step[activeStep(channel, profile)];
         if (fraction === undefined || messagePassesModel(item.at_ms, index, fraction)) {
@@ -107,10 +108,28 @@ export async function runReplay(
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
     const endMs = replay.events.at(-1)?.at_ms ?? 0;
-    await clock.advanceTo(endMs + tailSeconds * 1000);
+    await advanceReplayTo(endMs + tailSeconds * 1000);
+    while (settingsPlayback.nextDeadline() !== null) {
+      await advanceReplayTo(settingsPlayback.nextDeadline()!);
+    }
   } finally {
     await run.stop();
   }
+  async function advanceReplayTo(targetMs: number): Promise<void> {
+    let deadline = settingsPlayback.nextDeadline();
+    while (deadline !== null && deadline <= targetMs) {
+      await clock.advanceTo(Math.max(clock.now(), deadline));
+      if (settingsPlayback.flush(clock.now()) > 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      deadline = settingsPlayback.nextDeadline();
+    }
+    await clock.advanceTo(targetMs);
+    if (settingsPlayback.flush(clock.now()) > 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+
   const logPath = join(stateDirectory, 'storm.log.jsonl');
   const lines = (await readFile(logPath, 'utf8')).trim().split('\n');
   const decisions = lines.filter(Boolean).map((line) => {

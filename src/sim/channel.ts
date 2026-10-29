@@ -1,3 +1,4 @@
+import { matchesChatSettings, settingsEventPatch } from '../util/chat-settings.ts';
 import type { ChatSettings, ChatSettingsPatch } from '../actuator/settings.ts';
 import type { ChatSettingsNotification, UndertowEvent } from '../eventsub/client.ts';
 import { emitSimulatedEvent } from './socket.ts';
@@ -10,20 +11,27 @@ export class SimulatedChannel {
   replies: SimulatedReply[] = [];
   patches: ChatSettingsPatch[] = [];
   private settingRevision = 0;
+  private now: () => number;
+  private changes: { atMs: number; settings: ChatSettings }[] = [];
 
-  constructor(baseline: ChatSettings) {
+  constructor(baseline: ChatSettings, now: () => number = () => 0) {
     this.settings = { ...baseline };
+    this.now = now;
   }
 
   applyRecordedSettings(event: ChatSettingsNotification): void {
-    const fields: (keyof ChatSettingsPatch)[] = [
-      'slow_mode', 'slow_mode_wait_time', 'follower_mode',
-      'follower_mode_duration', 'emote_mode', 'subscriber_mode', 'unique_chat_mode',
-    ];
-    for (const field of fields) {
-      const value = event[field];
-      if (value !== undefined) Object.assign(this.settings, { [field]: value });
-    }
+    this.settings = { ...this.settings, ...settingsEventPatch(event) };
+  }
+
+  hasProducedSettings(event: ChatSettingsNotification): boolean {
+    const patch = settingsEventPatch(event);
+    return this.changes.some((change) => matchesChatSettings(patch, change.settings));
+  }
+
+  matchesRecordedChange(event: ChatSettingsNotification, atMs: number): boolean {
+    const patch = settingsEventPatch(event);
+    return this.changes.some((change) => Math.abs(change.atMs - atMs) <= 3000 &&
+      matchesChatSettings(patch, change.settings));
   }
 
   createHelix(): Helix {
@@ -36,6 +44,7 @@ export class SimulatedChannel {
         const patch = JSON.parse(String(init.body)) as ChatSettingsPatch;
         this.patches.push({ ...patch });
         this.settings = { ...this.settings, ...patch };
+        this.changes.push({ atMs: this.now(), settings: { ...this.settings } });
         const event: UndertowEvent = {
           type: 'channel.chat_settings.update',
           message_id: `sim-settings-${this.settingRevision++}`,

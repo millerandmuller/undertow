@@ -1,3 +1,4 @@
+import { normalizeChatSettings, type NullableChatSettings } from '../util/chat-settings.ts';
 import { readFile, writeFile } from 'node:fs/promises';
 import type { ChatSettings } from '../actuator/settings.ts';
 import type { EventSubEvent, UndertowEvent } from '../eventsub/client.ts';
@@ -22,6 +23,7 @@ export type ReplayEvent = {
   at_ms: number;
   type: ReplayType;
   event: EventSubEvent;
+  own_echo?: boolean;
 };
 
 export type ReplayFile = { header: ReplayHeader; events: ReplayEvent[] };
@@ -43,7 +45,7 @@ function requireString(value: unknown, name: string): void {
   }
 }
 
-function validateBaseline(value: unknown): asserts value is ChatSettings {
+function validateBaseline(value: unknown): ChatSettings {
   if (!isObject(value)) throw new Error('header.baseline must be an object');
   const bools = [
     'slow_mode', 'follower_mode', 'emote_mode', 'subscriber_mode', 'unique_chat_mode',
@@ -52,10 +54,12 @@ function validateBaseline(value: unknown): asserts value is ChatSettings {
     if (typeof value[key] !== 'boolean') throw new Error(`baseline.${key} must be boolean`);
   }
   for (const key of ['slow_mode_wait_time', 'follower_mode_duration']) {
-    if (typeof value[key] !== 'number' || !Number.isFinite(value[key])) {
-      throw new Error(`baseline.${key} must be a number`);
+    if (value[key] !== null && (typeof value[key] !== 'number' ||
+      !Number.isFinite(value[key]) || value[key] < 0)) {
+      throw new Error(`baseline.${key} must be null or a finite number at least 0`);
     }
   }
+  return normalizeChatSettings(value as NullableChatSettings);
 }
 
 function validateEvent(type: string, event: unknown): asserts event is EventSubEvent {
@@ -87,8 +91,8 @@ function parseHeader(value: unknown): ReplayHeader {
   requireString(value.label, 'header.label');
   requireString(value.broadcaster_id, 'header.broadcaster_id');
   if (typeof value.synthetic !== 'boolean') throw new Error('header.synthetic must be boolean');
-  validateBaseline(value.baseline);
-  return value as unknown as ReplayHeader;
+  const baseline = validateBaseline(value.baseline);
+  return { ...value, baseline } as unknown as ReplayHeader;
 }
 
 export function parseReplay(text: string): ReplayFile {
@@ -118,6 +122,9 @@ export function parseReplay(text: string): ReplayFile {
     if (raw.at_ms < previous) throw new Error('replay event offsets must not go backwards');
     previous = raw.at_ms;
     if (typeof raw.type !== 'string') throw new Error(`replay line ${index + 2} is missing type`);
+    if (raw.own_echo !== undefined && typeof raw.own_echo !== 'boolean') {
+      throw new Error(`replay line ${index + 2} own_echo must be boolean`);
+    }
     validateEvent(raw.type, raw.event);
     return raw as unknown as ReplayEvent;
   });

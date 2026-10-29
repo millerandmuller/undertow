@@ -1,3 +1,6 @@
+import {
+  normalizeChatSettings, settingsEventPatch,
+} from './util/chat-settings.ts';
 import { access, appendFile, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
@@ -141,20 +144,6 @@ const PATCH_KEYS: (keyof ChatSettings)[] = [
   'slow_mode', 'slow_mode_wait_time', 'follower_mode', 'follower_mode_duration',
   'emote_mode', 'subscriber_mode', 'unique_chat_mode',
 ];
-
-function eventPatch(event: ChatSettingsNotification): ChatSettingsPatch {
-  const patch: ChatSettingsPatch = {};
-  for (const key of PATCH_KEYS) {
-    const alias = key === 'slow_mode_wait_time'
-      ? event.slow_mode_wait_time_seconds
-      : key === 'follower_mode_duration'
-      ? event.follower_mode_duration_minutes
-      : undefined;
-    const value = alias ?? event[key];
-    if (value !== undefined) Object.assign(patch, { [key]: value });
-  }
-  return patch;
-}
 
 function matchesExpected(patch: ChatSettingsPatch, expected: ChatSettings): boolean {
   const keys = Object.keys(patch) as (keyof ChatSettings)[];
@@ -355,7 +344,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       label: 'recorded Undertow run',
       synthetic: false,
       broadcaster_id: options.broadcasterId,
-      baseline,
+      baseline: normalizeChatSettings(baseline),
     };
     await writeFile(options.recordPath, `${JSON.stringify(header)}\n`, { mode: 0o600 });
   }
@@ -562,7 +551,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
   }
 
   async function processManualSettings(event: ChatSettingsNotification): Promise<void> {
-    const patch = eventPatch(event);
+    const patch = settingsEventPatch(event);
     const keys = Object.keys(patch) as (keyof ChatSettings)[];
     if (keys.length === 0) return;
     if (expectedHistory.some((snapshot) => matchesExpected(patch, snapshot))) return;
@@ -601,7 +590,8 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     try {
       const nowMs = clock.now();
       if (options.recordPath) {
-        recordQueue = recordQueue.then(() => recordEvent(event, nowMs));
+        const ownEcho = isOwnEcho(event);
+        recordQueue = recordQueue.then(() => recordEvent(event, nowMs, ownEcho));
         await recordQueue;
       }
       if (event.type === 'channel.chat.message') {
@@ -646,7 +636,17 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
     }
   }
 
-  async function recordEvent(event: UndertowEvent, nowMs: number): Promise<void> {
+  function isOwnEcho(event: UndertowEvent): boolean {
+    if (event.type !== 'channel.chat_settings.update') return false;
+    const patch = settingsEventPatch(event.event as ChatSettingsNotification);
+    return expectedHistory.some((snapshot) => matchesExpected(patch, snapshot));
+  }
+
+  async function recordEvent(
+    event: UndertowEvent,
+    nowMs: number,
+    ownEcho: boolean,
+  ): Promise<void> {
     if (!options.recordPath || !isReplayType(event.type)) return;
     const safeEvent = recordedPayload(event);
     const item: ReplayEvent = {
@@ -655,6 +655,7 @@ export async function startRun(options: RunOptions): Promise<RunHandle> {
       type: event.type,
       event: safeEvent,
     };
+    if (event.type === 'channel.chat_settings.update') item.own_echo = ownEcho;
     await appendFile(options.recordPath, `${JSON.stringify(item)}\n`);
   }
 

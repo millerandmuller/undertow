@@ -14,11 +14,11 @@ export type ChatNotification = {
 export type ChatSettingsNotification = {
   broadcaster_user_id: string;
   slow_mode?: boolean;
-  slow_mode_wait_time_seconds?: number;
-  slow_mode_wait_time?: number;
+  slow_mode_wait_time_seconds?: number | null;
+  slow_mode_wait_time?: number | null;
   follower_mode?: boolean;
-  follower_mode_duration_minutes?: number;
-  follower_mode_duration?: number;
+  follower_mode_duration_minutes?: number | null;
+  follower_mode_duration?: number | null;
   emote_mode?: boolean;
   subscriber_mode?: boolean;
   unique_chat_mode?: boolean;
