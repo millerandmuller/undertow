@@ -6,14 +6,19 @@ Work in progress. Built for the Codex x TwitchCon Hackathon (October 23 to Novem
 
 ## Run Undertow
 
-Use Node 25.4+ (native fetch, WebSocket, and TypeScript type stripping). Copy `.env.example` to `.env`, set `TWITCH_CLIENT_ID` and `TWITCH_CHANNEL_LOGIN`, then use the npm scripts below.
+Use Node 25.4+ (native fetch, WebSocket, and TypeScript type stripping). Copy
+`.env.example` to `.env`, set `TWITCH_CLIENT_ID` and `TWITCH_CHANNEL_LOGIN`, then
+use the npm scripts below.
 They load `.env` automatically; clones without the file can still run commands such as
 `npm run probe` to see its plan. For Confidential Twitch apps, also set
 `TWITCH_CLIENT_SECRET`; it is used only when refreshing tokens.
 
 - `npm run login` — authenticate through Twitch device login and save `.undertow/tokens.json`.
-- `npm run probe -- --yes` — save a baseline, briefly set slow mode to 10 seconds, then restore and verify. Without `--yes`, prints the plan only.
-- `npm run watch -- --seconds 30` — listen to EventSub for 30 seconds by default and print event types.
+- `npm run login -- --account <login>` — add a plain team account for load testing.
+- `npm run probe -- --yes` — save a baseline, briefly set slow mode to 10
+  seconds, then restore and verify. Without `--yes`, prints the plan only.
+- `npm run watch -- --seconds 30` — listen to EventSub for 30 seconds by
+  default and print event types.
 - `npm run restore` — restore and verify saved chat settings.
 - `npm test` — run local tests.
 
@@ -89,3 +94,25 @@ labeled `modeled` and is a synthetic assumption, not a measurement. The only
 impact number shown in the demo comes from the live load test; modeled numbers are
 for testing controller behavior. A grey card and `reconnecting` reason indicate a
 lost local connection.
+
+## Labeled load test
+
+Create one account file per plain Twitch account owned by the team. Sign in to
+that account in a browser, run `npm run login -- --account <login>`, then enter
+the device code at `twitch.tv/activate`. Each account needs only
+`user:write:chat`; it should be a plain account with no moderator role. The
+broadcaster account is refused as a sender.
+
+Run the controller separately with `node src/cli.ts run --live --profile loadtest`.
+Then run `npm run loadtest -- --rate 0.5 --burst 90 --taper 30`. The load test
+always targets `TWITCH_CHANNEL_LOGIN`, caps each account at 0.6 messages per
+second and at 18 attempts per rolling 30 seconds, and prefixes every scripted
+line with `[load test] `. The committed neutral lines are in
+`loadtest/lines.txt`. Start with `--dry` to print the account and rate plan
+without sending messages. Account count comes from the account files present.
+
+The summary reports accepted and dropped messages and observed rates from the
+actual send responses. It does not estimate impact. Load test state and
+message records are written to `.undertow/loadtest.state.json` and
+`.undertow/loadtest.log.jsonl`; the run loop uses the active state for the
+overlay badge. Account tokens are stored separately in `.undertow/accounts/`.
