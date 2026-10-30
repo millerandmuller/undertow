@@ -1,4 +1,7 @@
-# Undertow
+# Undertow Pace
+
+Undertow Pace is the public name; the CLI, the code and the demo video use the
+short form "Undertow".
 
 ## What it does (30 seconds)
 
